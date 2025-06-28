@@ -1,38 +1,49 @@
-# Check if key files exist
-$files = @(
-    ".env",
-    ".env.example", 
-    "requirements.txt",
-    "requirements-dev.txt",
-    "Dockerfile",
-    "docker-compose.yml",
-    ".gitignore",
-    "README.md",
-    "pytest.ini",
-    "alembic.ini",
-    "app\main.py",
-    "app\__init__.py",
-    "app\db\base.py",
-    "app\db\session.py"
+# Navigate to shared-types root
+cd C:\Users\zuhad\OneDrive\Desktop\LaunchPaid\shared-types
+
+# Create new hyper-scale structure
+New-Item -ItemType Directory -Path @(
+    "src",
+    "src\shared",
+    "src\shared\events",
+    "src\shared\protocols",
+    "src\shared\exceptions",
+    "src\services",
+    "src\services\auth",
+    "src\services\creator",
+    "src\services\campaign", 
+    "src\services\payment",
+    "src\services\analytics",
+    "src\services\notification",
+    "src\services\integration",
+    "src\api-gateway",
+    "src\event-bus",
+    "infrastructure",
+    "infrastructure\terraform",
+    "infrastructure\kubernetes",
+    "infrastructure\monitoring",
+    ".github",
+    ".github\workflows"
 )
 
-Write-Host "Checking files..." -ForegroundColor Yellow
-foreach ($file in $files) {
-    if (Test-Path $file) {
-        Write-Host "✓ $file" -ForegroundColor Green
-    } else {
-        Write-Host "✗ $file" -ForegroundColor Red
-    }
+# Create service subdirectories
+$services = @("auth", "creator", "campaign", "payment", "analytics", "notification", "integration")
+foreach ($service in $services) {
+    New-Item -ItemType Directory -Path @(
+        "src\services\$service\api",
+        "src\services\$service\domain",
+        "src\services\$service\infrastructure",
+        "src\services\$service\application",
+        "src\services\$service\tests"
+    )
 }
 
-# Check for router.py files in endpoints
-$endpoints = @("auth", "campaigns", "creators", "applications", "deliverables", "payments", "analytics", "integrations", "notifications", "admin")
-Write-Host "`nChecking router files..." -ForegroundColor Yellow
-foreach ($endpoint in $endpoints) {
-    $routerPath = "app\api\v1\endpoints\$endpoint\router.py"
-    if (Test-Path $routerPath) {
-        Write-Host "✓ $routerPath" -ForegroundColor Green
-    } else {
-        Write-Host "✗ $routerPath" -ForegroundColor Red
-    }
-}
+# Create core files
+New-Item -ItemType File -Path @(
+    "docker-compose.prod.yml",
+    "docker-compose.dev.yml",
+    ".github\workflows\deploy.yml",
+    "infrastructure\kubernetes\namespace.yaml",
+    "src\api-gateway\main.py",
+    "src\event-bus\kafka_config.py"
+)
