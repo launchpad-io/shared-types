@@ -1,0 +1,12 @@
+# Include all from requirements.txt
+-r requirements.txt
+
+# Additional development dependencies
+autopep8==2.0.4
+pylint==3.0.2
+bandit==1.7.5  # Security linting
+safety==2.3.5  # Check for vulnerable dependencies
+jupyter==1.0.0
+ipython==8.17.2
+httpie==3.2.2  # CLI HTTP client for testing
+locust==2.17.0  # Load testing
