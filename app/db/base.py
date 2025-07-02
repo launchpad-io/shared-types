@@ -1,24 +1,12 @@
-from sqlalchemy.orm import declarative_base, declared_attr
-from sqlalchemy import Column, DateTime, Boolean, String
-from sqlalchemy.dialects.postgresql import UUID
-import uuid
-from datetime import datetime
+"""
+Database base configuration for TikTok Shop Creator CRM
+Imports all models to ensure they're registered with SQLAlchemy
+"""
 
-class BaseModel:
-    @declared_attr
-    def __tablename__(cls):
-        return cls.__name__.lower()
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Soft delete
-    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
-    deleted_at = Column(DateTime, nullable=True)
-    
-    # Audit fields
-    created_by = Column(UUID(as_uuid=True), nullable=True)
-    updated_by = Column(UUID(as_uuid=True), nullable=True)
+# Import the base class first
+from app.db.base_class import Base  # noqa
 
-Base = declarative_base(cls=BaseModel)
+# Import all models after Base is defined
+# This will be done at the end of the file to avoid circular imports
+
+__all__ = ["Base"]

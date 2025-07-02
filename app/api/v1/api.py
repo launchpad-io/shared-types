@@ -1,90 +1,28 @@
+"""
+API V1 Router
+Combines all endpoint routers
+"""
+
 from fastapi import APIRouter, Depends
 from app.core.dependencies import get_current_active_user
-from app.api.v1.endpoints import (
-    auth,
-    creators,
-    campaigns,
-    applications,
-    deliverables,
-    payments,
-    analytics,
-    integrations,
-    notifications,
-    admin
-)
+
+# Only import the endpoints we have created
+from app.api.v1.endpoints import users, creators
 
 # Create main API router
 api_router = APIRouter()
 
-# Public routes (no authentication required)
+# Include routers we have implemented
 api_router.include_router(
-    auth.router,
-    prefix="/auth",
-    tags=["authentication"]
+    users.router,
+    prefix="/users",
+    tags=["users"]
 )
 
-# Protected routes (authentication required)
 api_router.include_router(
     creators.router,
     prefix="/creators",
     tags=["creators"],
-    dependencies=[Depends(get_current_active_user)]
-)
-
-api_router.include_router(
-    campaigns.router,
-    prefix="/campaigns",
-    tags=["campaigns"],
-    dependencies=[Depends(get_current_active_user)]
-)
-
-api_router.include_router(
-    applications.router,
-    prefix="/applications",
-    tags=["applications"],
-    dependencies=[Depends(get_current_active_user)]
-)
-
-api_router.include_router(
-    deliverables.router,
-    prefix="/deliverables",
-    tags=["deliverables"],
-    dependencies=[Depends(get_current_active_user)]
-)
-
-api_router.include_router(
-    payments.router,
-    prefix="/payments",
-    tags=["payments"],
-    dependencies=[Depends(get_current_active_user)]
-)
-
-api_router.include_router(
-    analytics.router,
-    prefix="/analytics",
-    tags=["analytics"],
-    dependencies=[Depends(get_current_active_user)]
-)
-
-api_router.include_router(
-    integrations.router,
-    prefix="/integrations",
-    tags=["integrations"],
-    dependencies=[Depends(get_current_active_user)]
-)
-
-api_router.include_router(
-    notifications.router,
-    prefix="/notifications",
-    tags=["notifications"],
-    dependencies=[Depends(get_current_active_user)]
-)
-
-# Admin routes (admin role required)
-api_router.include_router(
-    admin.router,
-    prefix="/admin",
-    tags=["admin"],
     dependencies=[Depends(get_current_active_user)]
 )
 
@@ -103,15 +41,28 @@ async def api_status():
         "status": "operational",
         "version": "1.0.0",
         "endpoints": {
-            "auth": "operational",
+            "users": "operational",
             "creators": "operational",
-            "campaigns": "operational",
-            "applications": "operational",
-            "deliverables": "operational",
-            "payments": "operational",
-            "analytics": "operational",
-            "integrations": "operational",
-            "notifications": "operational",
-            "admin": "operational"
+            # Add more as we implement them
+            "auth": "not_implemented",
+            "campaigns": "not_implemented",
+            "applications": "not_implemented",
+            "deliverables": "not_implemented",
+            "payments": "not_implemented",
+            "analytics": "not_implemented",
+            "integrations": "not_implemented",
+            "notifications": "not_implemented",
+            "admin": "not_implemented"
         }
     }
+
+# TODO: Add these routers as they are implemented:
+# - auth router for authentication
+# - campaigns router
+# - applications router
+# - deliverables router
+# - payments router
+# - analytics router
+# - integrations router
+# - notifications router
+# - admin router

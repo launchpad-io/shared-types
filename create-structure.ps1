@@ -1,5 +1,5 @@
 # Navigate to shared-types root
-cd C:\Users\zuhad\OneDrive\Desktop\LaunchPaid\shared-types
+#cd C:\Users\zuhad\OneDrive\Desktop\LaunchPaid\shared-types
 
 # Create new hyper-scale structure
 New-Item -ItemType Directory -Path @(

@@ -1,71 +1,125 @@
-from passlib.context import CryptContext
-from jose import jwt, JWTError
+"""
+Security utilities for password hashing and JWT token handling
+"""
+
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
-import secrets
-import redis.asyncio as redis
+from typing import Optional, Any
+
+from jose import jwt
+from passlib.context import CryptContext
+
 from app.core.config import settings
 
+# Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Redis for token blacklist
-redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
-class SecurityService:
-    @staticmethod
-    def verify_password(plain_password: str, hashed_password: str) -> bool:
-        return pwd_context.verify(plain_password, hashed_password)
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    Verify a plain password against a hashed password.
     
-    @staticmethod
-    def get_password_hash(password: str) -> str:
-        return pwd_context.hash(password)
-    
-    @staticmethod
-    def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
-        to_encode = data.copy()
-        expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-        to_encode.update({
-            "exp": expire,
-            "iat": datetime.utcnow(),
-            "jti": secrets.token_urlsafe(32)  # JWT ID for blacklisting
-        })
-        return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    
-    @staticmethod
-    def create_refresh_token(data: Dict[str, Any]) -> str:
-        to_encode = data.copy()
-        expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-        to_encode.update({
-            "exp": expire,
-            "iat": datetime.utcnow(),
-            "jti": secrets.token_urlsafe(32),
-            "type": "refresh"
-        })
-        return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    
-    @staticmethod
-    async def decode_token(token: str) -> Dict[str, Any]:
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-            
-            # Check if token is blacklisted
-            jti = payload.get("jti")
-            if jti and await redis_client.get(f"blacklist:{jti}"):
-                raise JWTError("Token has been revoked")
-                
-            return payload
-        except JWTError:
-            raise
-    
-    @staticmethod
-    async def blacklist_token(token: str):
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        jti = payload.get("jti")
-        exp = payload.get("exp")
+    Args:
+        plain_password: Plain text password
+        hashed_password: Hashed password to verify against
         
-        if jti and exp:
-            ttl = exp - datetime.utcnow().timestamp()
-            if ttl > 0:
-                await redis_client.setex(f"blacklist:{jti}", int(ttl), "1")
+    Returns:
+        True if password matches, False otherwise
+    """
+    return pwd_context.verify(plain_password, hashed_password)
 
+
+def get_password_hash(password: str) -> str:
+    """
+    Hash a password using bcrypt.
+    
+    Args:
+        password: Plain text password
+        
+    Returns:
+        Hashed password
+    """
+    return pwd_context.hash(password)
+
+
+def create_access_token(
+    subject: str,
+    expires_delta: Optional[timedelta] = None
+) -> str:
+    """
+    Create a JWT access token.
+    
+    Args:
+        subject: Subject of the token (usually user ID)
+        expires_delta: Optional expiration time delta
+        
+    Returns:
+        Encoded JWT token
+    """
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(
+            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+        )
+    
+    to_encode = {"exp": expire, "sub": str(subject)}
+    encoded_jwt = jwt.encode(
+        to_encode,
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM
+    )
+    return encoded_jwt
+
+
+def verify_token(token: str) -> Optional[str]:
+    """
+    Verify and decode a JWT token.
+    
+    Args:
+        token: JWT token to verify
+        
+    Returns:
+        Subject from token if valid, None otherwise
+    """
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM]
+        )
+        return payload.get("sub")
+    except jwt.JWTError:
+        return None
+
+
+# Create a security service instance
+class SecurityService:
+    """Security service for centralized security operations"""
+    
+    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
+        return verify_password(plain_password, hashed_password)
+    
+    def get_password_hash(self, password: str) -> str:
+        return get_password_hash(password)
+    
+    def create_access_token(self, subject: str, expires_delta: Optional[timedelta] = None) -> str:
+        return create_access_token(subject, expires_delta)
+    
+    def verify_token(self, token: str) -> Optional[str]:
+        return verify_token(token)
+    
+    async def decode_token(self, token: str) -> dict:
+        """Decode and return the token payload"""
+        try:
+            payload = jwt.decode(
+                token,
+                settings.SECRET_KEY,
+                algorithms=[settings.ALGORITHM]
+            )
+            return payload
+        except jwt.JWTError:
+            raise
+
+
+# Create global instance
 security_service = SecurityService()
