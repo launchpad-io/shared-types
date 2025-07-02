@@ -75,6 +75,56 @@ class AudienceDemographicsBulkUpdate(BaseModel):
         return self
 
 
+# NEW: Demographics visualization schemas
+class DemographicSegment(BaseModel):
+    """Single demographic segment for visualization"""
+    label: str
+    value: float
+    color: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class DemographicsVisualizationData(BaseModel):
+    """Demographics data formatted for charts"""
+    gender_distribution: List[DemographicSegment]
+    age_distribution: List[DemographicSegment]
+    location_distribution: List[DemographicSegment]
+    combined_segments: List[DemographicSegment]
+    summary_stats: Dict[str, Any]
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DemographicsAnalytics(BaseModel):
+    """Analytics data for demographics"""
+    total_reach: int = Field(..., ge=0)
+    primary_gender: Optional[str]
+    primary_age_group: Optional[str]
+    primary_location: Optional[str]
+    engagement_by_demographic: Dict[str, float]
+    growth_by_demographic: Dict[str, float]
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CreatorDemographicsProfile(BaseModel):
+    """Complete demographics profile for a creator"""
+    creator_id: UUID
+    demographics: List[AudienceDemographicResponse]
+    visualization_data: DemographicsVisualizationData
+    analytics: DemographicsAnalytics
+    last_updated: datetime
+    completeness_score: float = Field(..., ge=0, le=100)
+    
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_encoders={
+            datetime: lambda v: v.isoformat()
+        }
+    )
+
+
+# EXISTING schemas remain unchanged below
 class CreatorPerformanceMetrics(BaseModel):
     """Schema for creator performance metrics"""
     creator_id: UUID

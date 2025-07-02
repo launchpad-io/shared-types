@@ -4,7 +4,8 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
-
+# Import all models
+from app.db.init_models import Base
 # Add your project to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 

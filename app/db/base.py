@@ -1,12 +1,11 @@
 """
 Database base configuration for TikTok Shop Creator CRM
-Imports all models to ensure they're registered with SQLAlchemy
 """
 
-# Import the base class first
+# Import the base class - this should be imported by other modules
 from app.db.base_class import Base  # noqa
 
-# Import all models after Base is defined
-# This will be done at the end of the file to avoid circular imports
+# Don't import models here to avoid circular imports
+# Models will be imported by Alembic's env.py when needed for migrations
 
 __all__ = ["Base"]

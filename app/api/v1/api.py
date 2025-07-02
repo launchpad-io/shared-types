@@ -10,8 +10,9 @@ from app.core.dependencies import get_current_active_user
 from app.api.v1.endpoints import (
     users, 
     creators, 
-    badges,  # NEW: Badge endpoints
+    badges,
 )
+from app.api.v1.endpoints.demographics import router as demographics_router
 
 # Create main API router
 api_router = APIRouter()
@@ -30,11 +31,18 @@ api_router.include_router(
     dependencies=[Depends(get_current_active_user)]
 )
 
-# NEW: Include badge router
 api_router.include_router(
     badges.router,
     prefix="/badges",
     tags=["badges"],
+    dependencies=[Depends(get_current_active_user)]
+)
+
+# NEW: Include demographics router
+api_router.include_router(
+    demographics_router,
+    prefix="/demographics",
+    tags=["demographics"],
     dependencies=[Depends(get_current_active_user)]
 )
 
@@ -56,7 +64,8 @@ async def api_status():
         "endpoints": {
             "users": "operational",
             "creators": "operational",
-            "badges": "operational",  # NEW
+            "badges": "operational",
+            "demographics": "operational",  # NEW
             # Add more as we implement them
             "auth": "not_implemented",
             "campaigns": "not_implemented",

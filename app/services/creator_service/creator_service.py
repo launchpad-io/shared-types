@@ -8,6 +8,7 @@ from typing import Optional, List, Dict, Any
 from uuid import UUID
 from datetime import datetime, timedelta
 from decimal import Decimal
+from collections import defaultdict
 
 from sqlalchemy import select, delete, and_, or_, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +22,11 @@ from app.models.creator import (
     AgeGroup,
     BadgeType
 )
-from app.schemas.creator import AudienceDemographicCreate
+from app.schemas.creator import (
+    AudienceDemographicCreate,
+    DemographicsVisualizationData,
+    DemographicSegment
+)
 from app.utils.logging import get_logger
 from app.core.cache import cache
 
@@ -54,7 +59,7 @@ class CreatorService:
                 .where(
                     and_(
                         User.id == creator_id,
-                        User.role == UserRole.CREATOR
+                        User.role == UserRole.creator
                     )
                 )
             )
@@ -203,6 +208,175 @@ class CreatorService:
             await self.session.rollback()
             raise
     
+    # NEW: Enhanced demographics methods
+    async def get_demographics_visualization_data(
+        self, 
+        creator_id: UUID
+    ) -> DemographicsVisualizationData:
+        """
+        Get demographics data formatted for visualization.
+        
+        Args:
+            creator_id: UUID of the creator
+            
+        Returns:
+            Formatted data for charts
+        """
+        try:
+            demographics = await self.get_audience_demographics(creator_id)
+            
+            if not demographics:
+                # Return empty visualization data
+                return DemographicsVisualizationData(
+                    gender_distribution=[],
+                    age_distribution=[],
+                    location_distribution=[],
+                    combined_segments=[],
+                    summary_stats={
+                        "total_segments": 0,
+                        "has_demographics": False
+                    }
+                )
+            
+            # Gender distribution
+            gender_data = defaultdict(float)
+            for demo in demographics:
+                gender_data[demo.gender] += float(demo.percentage)
+            
+            gender_distribution = [
+                DemographicSegment(
+                    label=self._format_gender_label(gender),
+                    value=percentage,
+                    color=self._get_gender_color(gender)
+                )
+                for gender, percentage in gender_data.items()
+            ]
+            
+            # Age distribution
+            age_data = defaultdict(float)
+            for demo in demographics:
+                age_data[demo.age_group] += float(demo.percentage)
+            
+            age_distribution = [
+                DemographicSegment(
+                    label=age_group,
+                    value=percentage,
+                    color=self._get_age_color(age_group)
+                )
+                for age_group, percentage in sorted(age_data.items())
+            ]
+            
+            # Location distribution
+            location_data = defaultdict(float)
+            for demo in demographics:
+                if demo.country:
+                    location_data[demo.country] += float(demo.percentage)
+            
+            location_distribution = [
+                DemographicSegment(
+                    label=self._get_country_name(country),
+                    value=percentage,
+                    metadata={"code": country}
+                )
+                for country, percentage in sorted(
+                    location_data.items(), 
+                    key=lambda x: x[1], 
+                    reverse=True
+                )[:10]  # Top 10 countries
+            ]
+            
+            # Combined segments (top 10)
+            combined_segments = []
+            for demo in sorted(demographics, key=lambda d: d.percentage, reverse=True)[:10]:
+                combined_segments.append(
+                    DemographicSegment(
+                        label=f"{self._format_gender_label(demo.gender)} {demo.age_group}",
+                        value=float(demo.percentage),
+                        metadata={
+                            "gender": demo.gender,
+                            "age_group": demo.age_group,
+                            "country": demo.country
+                        }
+                    )
+                )
+            
+            # Summary stats
+            primary_demo = max(demographics, key=lambda d: d.percentage)
+            summary_stats = {
+                "total_segments": len(demographics),
+                "has_demographics": True,
+                "primary_audience": {
+                    "gender": primary_demo.gender,
+                    "age_group": primary_demo.age_group,
+                    "percentage": float(primary_demo.percentage)
+                },
+                "gender_balance": {
+                    "female": gender_data.get("female", 0),
+                    "male": gender_data.get("male", 0)
+                }
+            }
+            
+            return DemographicsVisualizationData(
+                gender_distribution=gender_distribution,
+                age_distribution=age_distribution,
+                location_distribution=location_distribution,
+                combined_segments=combined_segments,
+                summary_stats=summary_stats
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting visualization data: {str(e)}")
+            raise
+    
+    async def calculate_demographics_completeness(
+        self, 
+        creator_id: UUID
+    ) -> float:
+        """
+        Calculate how complete the demographics data is.
+        
+        Args:
+            creator_id: UUID of the creator
+            
+        Returns:
+            Completeness percentage (0-100)
+        """
+        try:
+            demographics = await self.get_audience_demographics(creator_id)
+            
+            if not demographics:
+                return 0.0
+            
+            # Check for required combinations
+            required_genders = {"male", "female"}
+            required_age_groups = {"18-24", "25-34", "35-44"}
+            
+            present_genders = set(d.gender for d in demographics)
+            present_age_groups = set(d.age_group for d in demographics)
+            has_countries = any(d.country for d in demographics)
+            
+            # Calculate score
+            score = 0.0
+            
+            # Gender coverage (40%)
+            gender_coverage = len(present_genders.intersection(required_genders)) / len(required_genders)
+            score += gender_coverage * 40
+            
+            # Age group coverage (40%)
+            age_coverage = len(present_age_groups.intersection(required_age_groups)) / len(required_age_groups)
+            score += age_coverage * 40
+            
+            # Country data (20%)
+            if has_countries:
+                score += 20
+            
+            return min(score, 100.0)
+            
+        except Exception as e:
+            logger.error(f"Error calculating completeness: {str(e)}")
+            return 0.0
+    
+    # EXISTING methods remain unchanged
     async def get_public_profile(self, creator_id: UUID) -> Optional[Dict[str, Any]]:
         """
         Get public-facing creator profile information.
@@ -247,7 +421,7 @@ class CreatorService:
             profile = {
                 'id': str(creator.id),
                 'username': creator.username,
-                'full_name': creator.full_name,
+                'full_name': f"{creator.first_name or ''} {creator.last_name or ''}".strip() or None,
                 'profile_image_url': creator.profile_image_url,
                 'bio': creator.bio,
                 'content_niche': creator.content_niche,
@@ -298,7 +472,7 @@ class CreatorService:
         """
         try:
             # Build base query
-            query = select(User).where(User.role == UserRole.CREATOR)
+            query = select(User).where(User.role == UserRole.creator)
             
             # Apply filters
             filters = []
@@ -339,7 +513,7 @@ class CreatorService:
             # Count total
             count_query = select(func.count()).select_from(query.subquery())
             total_result = await self.session.execute(count_query)
-            total = total_result.scalar()
+            total = total_result.scalar() or 0
             
             # Apply pagination
             offset = (page - 1) * per_page
@@ -450,3 +624,53 @@ class CreatorService:
         
         for key in cache_keys:
             await cache.delete(key)
+    
+    def _format_gender_label(self, gender: str) -> str:
+        """Format gender for display"""
+        labels = {
+            'male': 'Male',
+            'female': 'Female',
+            'non_binary': 'Non-Binary',
+            'prefer_not_to_say': 'Not Specified'
+        }
+        return labels.get(gender, gender.title())
+    
+    def _get_gender_color(self, gender: str) -> str:
+        """Get color for gender visualization"""
+        colors = {
+            'male': '#3B82F6',      # Blue
+            'female': '#EC4899',    # Pink
+            'non_binary': '#8B5CF6', # Purple
+            'prefer_not_to_say': '#6B7280'  # Gray
+        }
+        return colors.get(gender, '#6B7280')
+    
+    def _get_age_color(self, age_group: str) -> str:
+        """Get color for age group visualization"""
+        colors = {
+            '13-17': '#F59E0B',    # Amber
+            '18-24': '#3B82F6',    # Blue
+            '25-34': '#10B981',    # Green
+            '35-44': '#8B5CF6',    # Purple
+            '45-54': '#EF4444',    # Red
+            '55+': '#6B7280'       # Gray
+        }
+        return colors.get(age_group, '#6B7280')
+    
+    def _get_country_name(self, country_code: str) -> str:
+        """Get country name from code"""
+        # Common country mappings
+        country_names = {
+            'US': 'United States',
+            'GB': 'United Kingdom',
+            'CA': 'Canada',
+            'AU': 'Australia',
+            'DE': 'Germany',
+            'FR': 'France',
+            'JP': 'Japan',
+            'CN': 'China',
+            'IN': 'India',
+            'BR': 'Brazil',
+            'MX': 'Mexico'
+        }
+        return country_names.get(country_code, country_code)

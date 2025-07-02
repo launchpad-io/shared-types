@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     SENDBLUE_API_KEY: Optional[str] = None
     SENDBLUE_API_URL: str = "https://api.sendblue.co/api/v1"
     
-    # TikTok Shop Integration (NEW)
+    # TikTok Shop Integration
     TIKTOK_SHOP_API_KEY: Optional[str] = None
     TIKTOK_SHOP_API_SECRET: Optional[str] = None
     TIKTOK_SHOP_APP_ID: Optional[str] = None
@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     CREATOR_MAX_PROFILE_UPDATES_PER_HOUR: int = 20
     CREATOR_ONBOARDING_REWARD_ENABLED: bool = True
     
-    # Badge System Settings (NEW)
+    # Badge System Settings
     BADGE_CHECK_INTERVAL_HOURS: int = 24  # How often to check all creators for badges
     BADGE_SYNC_BATCH_SIZE: int = 100  # Batch size for GMV sync
     BADGE_PROGRESS_CACHE_TTL: int = 300  # 5 minutes
@@ -130,10 +130,23 @@ class Settings(BaseSettings):
     BADGE_GMV_SYNC_ENABLED: bool = True  # Enable automatic GMV syncing
     BADGE_NOTIFICATION_ENABLED: bool = True  # Enable badge achievement notifications
     
-    # GMV Sync Settings (NEW)
+    # GMV Sync Settings
     GMV_SYNC_INTERVAL_HOURS: int = 1  # How often to sync recent GMV
     GMV_FULL_SYNC_INTERVAL_DAYS: int = 1  # Full sync interval
     GMV_MOCK_MODE: bool = False  # Use mock data when TikTok API not available
+    
+    # Demographics Settings (NEW)
+    DEMOGRAPHICS_SYNC_ENABLED: bool = False  # Enable TikTok demographics sync (when API available)
+    DEMOGRAPHICS_SYNC_INTERVAL_HOURS: int = 24  # How often to sync demographics
+    DEMOGRAPHICS_SYNC_BATCH_SIZE: int = 50  # Batch size for demographics sync
+    DEMOGRAPHICS_MOCK_MODE: bool = True  # Use mock data until TikTok API available
+    DEMOGRAPHICS_CACHE_TTL: int = 300  # 5 minutes cache for visualization data
+    DEMOGRAPHICS_IMPORT_MAX_ROWS: int = 1000  # Max rows per import file
+    DEMOGRAPHICS_PERCENTAGE_TOLERANCE: float = 0.5  # Tolerance for percentage sum validation
+    
+    # Demographics Import Settings (NEW)
+    DEMOGRAPHICS_ALLOWED_FORMATS: List[str] = [".csv", ".xlsx", ".xls"]
+    DEMOGRAPHICS_TEMPLATE_CACHE_TTL: int = 3600  # 1 hour cache for templates
     
     model_config = SettingsConfigDict(
         env_file=".env",
