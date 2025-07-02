@@ -1,6 +1,6 @@
 """
 Creator-specific API endpoints for TikTok Shop Creator CRM
-Handles badges, demographics, performance metrics, and creator-specific features.
+Handles creator profiles, demographics, and integrates with badge system.
 """
 
 from typing import List, Optional, Dict, Any
@@ -12,25 +12,29 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from pydantic import EmailStr
 
 from app.db.session import get_db
 from app.core.dependencies import get_current_active_user, require_creator_role
 from app.models.user import User, UserRole
-from app.models.creator import BadgeType
 from app.schemas.creator import (
-    CreatorBadgeResponse,
-    BadgeProgressResponse,
-    AllBadgesProgressResponse,
     AudienceDemographicCreate,
     AudienceDemographicResponse,
     AudienceDemographicsBulkUpdate,
     CreatorPerformanceMetrics,
     CreatorRankingResponse,
     CreatorLeaderboardResponse,
-    CreatorAnalyticsSummary
+    CreatorAnalyticsSummary,
+    CreatorProfileResponse
+)
+from app.schemas.badge import (
+    BadgeResponse,
+    BadgeProgressResponse,
+    BadgeHistoryResponse,
+    BadgeShowcaseResponse
 )
 from app.services.creator_service.creator_service import CreatorService
-from app.services.creator_service.badge_service import BadgeService
+from app.services.badge_service import BadgeService, ProgressTracker
 from app.services.creator_service.analytics_service import CreatorAnalyticsService
 from app.core.cache import cache
 from app.utils.logging import get_logger
@@ -49,24 +53,85 @@ router = APIRouter(
 )
 
 
-# Badge endpoints
-@router.get("/badges", response_model=List[CreatorBadgeResponse], 
-           summary="Get earned badges")
-async def get_earned_badges(
+# Profile endpoints
+@router.get("/profile", response_model=CreatorProfileResponse, 
+           summary="Get current creator's profile")
+async def get_creator_profile(
     current_user: User = Depends(require_creator_role),
     db: AsyncSession = Depends(get_db)
-) -> List[CreatorBadgeResponse]:
+) -> CreatorProfileResponse:
     """
-    Get all badges earned by the current creator.
+    Get comprehensive profile for the current creator including badges.
     
     Returns:
-        List of earned badges with details
+        Complete creator profile with performance metrics and badges
     """
     try:
-        service = BadgeService(db)
-        badges = await service.get_creator_badges(current_user.id)
+        creator_service = CreatorService(db)
+        badge_service = BadgeService(db)
         
-        return [CreatorBadgeResponse.from_orm(badge) for badge in badges]
+        # Get basic profile
+        profile = await creator_service.get_creator_profile(current_user.id)
+        
+        # Get badges
+        badges = await badge_service.get_creator_badges(current_user.id)
+        
+        # Get badge progress
+        progress_tracker = ProgressTracker(db)
+        badge_progress = await progress_tracker.get_overall_progress(current_user.id)
+        
+        # Construct response
+        return CreatorProfileResponse(
+            id=profile.id,
+            username=profile.username,
+            email=profile.email,
+            first_name=profile.first_name,
+            last_name=profile.last_name,
+            profile_image_url=profile.profile_image_url,
+            bio=profile.bio,
+            content_niche=profile.content_niche,
+            follower_count=profile.follower_count,
+            average_views=profile.average_views,
+            engagement_rate=profile.engagement_rate,
+            current_gmv=float(profile.current_gmv or 0),
+            tiktok_handle=profile.tiktok_handle,
+            instagram_handle=profile.instagram_handle,
+            discord_handle=profile.discord_handle,
+            badges=badges,
+            badge_progress=badge_progress,
+            total_campaigns=0,  # TODO: Implement when campaigns are ready
+            completion_rate=0.0,  # TODO: Implement when campaigns are ready
+            avg_rating=None,  # TODO: Implement when ratings are ready
+            created_at=profile.created_at,
+            last_active=profile.last_login,
+            is_verified=profile.email_verified
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching creator profile: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch creator profile"
+        )
+
+
+# Badge endpoints integrated with creator routes
+@router.get("/badges", response_model=List[BadgeResponse], 
+           summary="Get creator's badges")
+async def get_creator_badges(
+    current_user: User = Depends(require_creator_role),
+    db: AsyncSession = Depends(get_db)
+) -> List[BadgeResponse]:
+    """
+    Get all badges (earned and unearned) for the current creator.
+    
+    Returns:
+        List of all badges with status and progress
+    """
+    try:
+        badge_service = BadgeService(db)
+        return await badge_service.get_creator_badges(current_user.id)
+        
     except Exception as e:
         logger.error(f"Error fetching badges: {str(e)}")
         raise HTTPException(
@@ -75,30 +140,23 @@ async def get_earned_badges(
         )
 
 
-@router.get("/badges/progress", response_model=AllBadgesProgressResponse, 
+@router.get("/badges/progress", response_model=BadgeProgressResponse, 
            summary="Get badge progress")
 @cache(expire=300)  # Cache for 5 minutes
 async def get_badge_progress(
     current_user: User = Depends(require_creator_role),
     db: AsyncSession = Depends(get_db)
-) -> AllBadgesProgressResponse:
+) -> BadgeProgressResponse:
     """
-    Get progress towards all available badges.
-    
-    Shows:
-    - Current GMV
-    - Earned badges
-    - Progress towards next badges
-    - All available badges with progress percentages
+    Get overall badge progress for the current creator.
     
     Returns:
-        AllBadgesProgressResponse: Comprehensive badge progress
+        Progress information including next badge details
     """
     try:
-        service = BadgeService(db)
-        progress = await service.get_all_badges_progress(current_user.id)
+        progress_tracker = ProgressTracker(db)
+        return await progress_tracker.get_overall_progress(current_user.id)
         
-        return AllBadgesProgressResponse(**progress)
     except Exception as e:
         logger.error(f"Error fetching badge progress: {str(e)}")
         raise HTTPException(
@@ -107,101 +165,123 @@ async def get_badge_progress(
         )
 
 
-@router.post("/badges/check", summary="Check and award badges")
-async def check_and_award_badges(
+@router.get("/badges/history", response_model=List[BadgeHistoryResponse], 
+           summary="Get badge history")
+async def get_badge_history(
     current_user: User = Depends(require_creator_role),
     db: AsyncSession = Depends(get_db)
-) -> JSONResponse:
+) -> List[BadgeHistoryResponse]:
     """
-    Check current GMV and award any newly earned badges.
-    
-    This endpoint should be called after GMV updates to ensure
-    badges are awarded promptly.
+    Get badge achievement history for the current creator.
     
     Returns:
-        List of newly awarded badges (if any)
+        List of badge achievements with dates
     """
     try:
-        service = BadgeService(db)
-        new_badges = await service.check_and_award_badges(
-            creator_id=current_user.id,
-            current_gmv=Decimal(str(current_user.total_gmv or 0))  # This would come from actual GMV tracking
-        )
+        badge_service = BadgeService(db)
+        return await badge_service.get_badge_history(current_user.id)
         
-        if new_badges:
-            return JSONResponse(
-                content={
-                    "message": f"Congratulations! You earned {len(new_badges)} new badge(s)",
-                    "badges": [badge.badge_name for badge in new_badges]
-                },
-                status_code=status.HTTP_200_OK
-            )
-        else:
-            return JSONResponse(
-                content={"message": "No new badges earned"},
-                status_code=status.HTTP_200_OK
-            )
     except Exception as e:
-        logger.error(f"Error checking badges: {str(e)}")
+        logger.error(f"Error fetching badge history: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to check badges"
+            detail="Failed to fetch badge history"
         )
 
 
-# Audience demographics endpoints
-@router.get("/demographics", response_model=List[AudienceDemographicResponse], 
+@router.get("/badges/showcase", response_model=BadgeShowcaseResponse, 
+           summary="Get badge showcase")
+async def get_badge_showcase(
+    current_user: User = Depends(require_creator_role),
+    db: AsyncSession = Depends(get_db)
+) -> BadgeShowcaseResponse:
+    """
+    Get badge showcase data for profile display.
+    
+    Returns:
+        Featured badges and achievement summary
+    """
+    try:
+        badge_service = BadgeService(db)
+        progress_tracker = ProgressTracker(db)
+        
+        # Get all badges
+        badges = await badge_service.get_creator_badges(current_user.id)
+        earned_badges = [b for b in badges if b.status == "earned"]
+        
+        # Get recent achievement
+        history = await badge_service.get_badge_history(current_user.id)
+        recent = history[0] if history else None
+        
+        # Get highest tier
+        highest_tier = None
+        if earned_badges:
+            earned_badges.sort(key=lambda x: x.gmv_requirement, reverse=True)
+            highest_tier = earned_badges[0].tier
+        
+        return BadgeShowcaseResponse(
+            featured_badges=earned_badges[:3],  # Top 3 badges
+            total_earned=len(earned_badges),
+            highest_tier=highest_tier,
+            recent_achievement=recent
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching badge showcase: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch badge showcase"
+        )
+
+
+# Audience Demographics endpoints
+@router.get("/demographics", response_model=List[AudienceDemographicResponse],
            summary="Get audience demographics")
 async def get_audience_demographics(
     current_user: User = Depends(require_creator_role),
     db: AsyncSession = Depends(get_db)
 ) -> List[AudienceDemographicResponse]:
     """
-    Get creator's audience demographic breakdown.
+    Get audience demographics for the current creator.
     
     Returns:
-        List of demographic segments with percentages
+        List of demographic breakdowns
     """
     try:
-        service = CreatorService(db)
-        demographics = await service.get_audience_demographics(current_user.id)
+        creator_service = CreatorService(db)
+        return await creator_service.get_audience_demographics(current_user.id)
         
-        return [AudienceDemographicResponse.from_orm(demo) for demo in demographics]
     except Exception as e:
         logger.error(f"Error fetching demographics: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch demographics"
+            detail="Failed to fetch audience demographics"
         )
 
 
-@router.put("/demographics", response_model=List[AudienceDemographicResponse], 
-           summary="Update audience demographics")
-async def update_audience_demographics(
-    demographics_data: AudienceDemographicsBulkUpdate,
+@router.put("/demographics/bulk", response_model=List[AudienceDemographicResponse],
+           summary="Bulk update demographics")
+async def bulk_update_demographics(
+    demographics: AudienceDemographicsBulkUpdate,
     current_user: User = Depends(require_creator_role),
     db: AsyncSession = Depends(get_db)
 ) -> List[AudienceDemographicResponse]:
     """
-    Update creator's audience demographics.
-    
-    Note: This replaces all existing demographic data.
-    Percentages for each gender must sum to 100%.
+    Bulk update audience demographics.
     
     Args:
-        demographics_data: Complete demographic breakdown
+        demographics: List of demographic entries (must sum to ~100%)
         
     Returns:
-        Updated demographic data
+        Updated demographic list
     """
     try:
-        service = CreatorService(db)
-        updated_demographics = await service.update_audience_demographics(
-            creator_id=current_user.id,
-            demographics=demographics_data.demographics
+        creator_service = CreatorService(db)
+        return await creator_service.update_audience_demographics(
+            current_user.id,
+            demographics.demographics
         )
         
-        return [AudienceDemographicResponse.from_orm(demo) for demo in updated_demographics]
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -215,69 +295,48 @@ async def update_audience_demographics(
         )
 
 
-@router.post("/demographics", response_model=AudienceDemographicResponse, 
-            summary="Add single demographic entry")
-async def add_demographic_entry(
-    demographic: AudienceDemographicCreate,
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> AudienceDemographicResponse:
-    """
-    Add or update a single demographic entry.
-    
-    Args:
-        demographic: Demographic data to add/update
-        
-    Returns:
-        Created or updated demographic entry
-    """
-    try:
-        service = CreatorService(db)
-        result = await service.add_demographic_entry(
-            creator_id=current_user.id,
-            demographic=demographic
-        )
-        
-        return AudienceDemographicResponse.from_orm(result)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Demographic entry already exists. Use PUT to update all demographics."
-        )
-    except Exception as e:
-        logger.error(f"Error adding demographic: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to add demographic entry"
-        )
-
-
 # Performance metrics endpoints
-@router.get("/performance", response_model=CreatorPerformanceMetrics, 
+@router.get("/performance", response_model=CreatorPerformanceMetrics,
            summary="Get performance metrics")
 @cache(expire=600)  # Cache for 10 minutes
 async def get_performance_metrics(
-    time_period: str = Query("all_time", regex="^(today|week|month|year|all_time)$"),
     current_user: User = Depends(require_creator_role),
     db: AsyncSession = Depends(get_db)
 ) -> CreatorPerformanceMetrics:
     """
-    Get creator's performance metrics.
+    Get comprehensive performance metrics for the current creator.
     
-    Args:
-        time_period: Time period for metrics (today/week/month/year/all_time)
-        
     Returns:
-        Performance metrics including GMV, conversion rates, etc.
+        Performance metrics including GMV, campaigns, and badges
     """
     try:
-        service = CreatorAnalyticsService(db)
-        metrics = await service.get_performance_metrics(
-            creator_id=current_user.id,
-            time_period=time_period
-        )
+        analytics_service = CreatorAnalyticsService(db)
+        badge_service = BadgeService(db)
+        progress_tracker = ProgressTracker(db)
         
-        return CreatorPerformanceMetrics(**metrics)
+        # Get performance metrics
+        metrics = await analytics_service.get_creator_performance_metrics(current_user.id)
+        
+        # Get badge info
+        badges = await badge_service.get_creator_badges(current_user.id)
+        earned_badges = [b for b in badges if b.status == "earned"]
+        
+        # Get highest badge
+        highest_badge = None
+        if earned_badges:
+            earned_badges.sort(key=lambda x: x.gmv_requirement, reverse=True)
+            highest_badge = earned_badges[0].name
+        
+        # Get next badge progress
+        progress = await progress_tracker.get_overall_progress(current_user.id)
+        
+        # Add badge info to metrics
+        metrics.badges_earned = len(earned_badges)
+        metrics.highest_badge = highest_badge
+        metrics.next_badge_progress = progress.progress_percentage
+        
+        return metrics
+        
     except Exception as e:
         logger.error(f"Error fetching performance metrics: {str(e)}")
         raise HTTPException(
@@ -286,34 +345,80 @@ async def get_performance_metrics(
         )
 
 
-@router.get("/leaderboard", response_model=CreatorLeaderboardResponse, 
+# Analytics endpoints
+@router.get("/analytics/summary", response_model=CreatorAnalyticsSummary,
+           summary="Get analytics summary")
+async def get_analytics_summary(
+    period_days: int = Query(30, ge=1, le=365, description="Period in days"),
+    current_user: User = Depends(require_creator_role),
+    db: AsyncSession = Depends(get_db)
+) -> CreatorAnalyticsSummary:
+    """
+    Get analytics summary for specified period.
+    
+    Args:
+        period_days: Number of days to analyze (1-365)
+        
+    Returns:
+        Comprehensive analytics summary
+    """
+    try:
+        analytics_service = CreatorAnalyticsService(db)
+        
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=period_days)
+        
+        return await analytics_service.get_analytics_summary(
+            current_user.id,
+            start_date,
+            end_date
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching analytics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch analytics"
+        )
+
+
+# Leaderboard endpoints
+@router.get("/leaderboard", response_model=CreatorLeaderboardResponse,
            summary="Get creator leaderboard")
-@cache(expire=300)  # Cache for 5 minutes
-async def get_leaderboard(
-    period: str = Query("monthly", regex="^(daily|weekly|monthly|all_time)$"),
-    limit: int = Query(10, ge=1, le=100),
-    current_user: User = Depends(get_current_active_user),
+@cache(expire=1800)  # Cache for 30 minutes
+async def get_creator_leaderboard(
+    period: str = Query("all-time", regex="^(weekly|monthly|all-time)$"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db)
 ) -> CreatorLeaderboardResponse:
     """
-    Get creator leaderboard rankings.
+    Get creator leaderboard based on GMV and badges.
     
     Args:
-        period: Time period for rankings
-        limit: Number of top creators to return
+        period: Leaderboard period (weekly, monthly, all-time)
+        limit: Number of creators to return
+        offset: Pagination offset
         
     Returns:
-        Leaderboard with top creators and current user's ranking
+        Leaderboard with creator rankings
     """
     try:
-        service = CreatorAnalyticsService(db)
-        leaderboard = await service.get_leaderboard(
+        analytics_service = CreatorAnalyticsService(db)
+        
+        leaderboard = await analytics_service.get_creator_leaderboard(
             period=period,
             limit=limit,
-            current_user_id=current_user.id if current_user.is_creator else None
+            offset=offset
         )
         
-        return CreatorLeaderboardResponse(**leaderboard)
+        return CreatorLeaderboardResponse(
+            period=period,
+            updated_at=datetime.utcnow(),
+            total_creators=leaderboard["total"],
+            leaderboard=leaderboard["creators"]
+        )
+        
     except Exception as e:
         logger.error(f"Error fetching leaderboard: {str(e)}")
         raise HTTPException(
@@ -322,142 +427,92 @@ async def get_leaderboard(
         )
 
 
-@router.get("/analytics/summary", response_model=CreatorAnalyticsSummary, 
-           summary="Get comprehensive analytics")
-async def get_analytics_summary(
-    current_user: User = Depends(require_creator_role),
+# Search creators (for agencies/brands)
+@router.get("/search", response_model=List[CreatorProfileResponse],
+           summary="Search creators")
+async def search_creators(
+    content_niche: Optional[str] = Query(None, description="Filter by niche"),
+    min_followers: Optional[int] = Query(None, ge=0, description="Minimum followers"),
+    min_engagement_rate: Optional[float] = Query(None, ge=0, le=100),
+    has_badge: Optional[str] = Query(None, description="Filter by badge type"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
-) -> CreatorAnalyticsSummary:
+) -> List[CreatorProfileResponse]:
     """
-    Get comprehensive analytics summary for creator.
-    
-    Includes:
-    - Performance metrics
-    - Audience demographics
-    - Badge progress
-    - Current ranking
-    
-    Returns:
-        Complete analytics summary
-    """
-    try:
-        # Fetch all data in parallel for better performance
-        creator_service = CreatorService(db)
-        badge_service = BadgeService(db)
-        analytics_service = CreatorAnalyticsService(db)
-        
-        # Get all data
-        performance = await analytics_service.get_performance_metrics(
-            creator_id=current_user.id,
-            time_period="all_time"
-        )
-        demographics = await creator_service.get_audience_demographics(current_user.id)
-        badge_progress = await badge_service.get_all_badges_progress(current_user.id)
-        ranking = await analytics_service.get_creator_ranking(current_user.id)
-        
-        return CreatorAnalyticsSummary(
-            performance_metrics=CreatorPerformanceMetrics(**performance),
-            audience_demographics=[AudienceDemographicResponse.from_orm(d) for d in demographics],
-            badge_progress=AllBadgesProgressResponse(**badge_progress),
-            ranking=CreatorRankingResponse(**ranking)
-        )
-    except Exception as e:
-        logger.error(f"Error fetching analytics summary: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch analytics summary"
-        )
-
-
-# Public creator profile endpoint
-@router.get("/profile/{creator_id}", response_model=Dict[str, Any], 
-           summary="Get public creator profile")
-async def get_public_creator_profile(
-    creator_id: UUID = Path(..., description="Creator's user ID"),
-    db: AsyncSession = Depends(get_db)
-) -> Dict[str, Any]:
-    """
-    Get public creator profile information.
-    
-    This endpoint is publicly accessible and returns limited information
-    suitable for display on creator pages or directories.
+    Search creators with filters (for agencies and brands).
     
     Args:
-        creator_id: UUID of the creator
+        content_niche: Filter by content niche
+        min_followers: Minimum follower count
+        min_engagement_rate: Minimum engagement rate
+        has_badge: Filter by specific badge type
+        limit: Number of results
+        offset: Pagination offset
         
     Returns:
-        Public profile information
+        List of creator profiles matching criteria
     """
     try:
-        service = CreatorService(db)
-        profile = await service.get_public_profile(creator_id)
-        
-        if not profile:
+        # Only agencies and brands can search creators
+        if current_user.role not in [UserRole.AGENCY, UserRole.BRAND, UserRole.ADMIN]:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Creator not found"
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only agencies and brands can search creators"
             )
+        
+        creator_service = CreatorService(db)
+        
+        creators = await creator_service.search_creators(
+            content_niche=content_niche,
+            min_followers=min_followers,
+            min_engagement_rate=min_engagement_rate,
+            has_badge=has_badge,
+            limit=limit,
+            offset=offset
+        )
+        
+        # Convert to response format with badges
+        results = []
+        badge_service = BadgeService(db)
+        
+        for creator in creators:
+            badges = await badge_service.get_creator_badges(creator.id)
             
-        return profile
+            results.append(CreatorProfileResponse(
+                id=creator.id,
+                username=creator.username,
+                email=creator.email,
+                first_name=creator.first_name,
+                last_name=creator.last_name,
+                profile_image_url=creator.profile_image_url,
+                bio=creator.bio,
+                content_niche=creator.content_niche,
+                follower_count=creator.follower_count,
+                average_views=creator.average_views,
+                engagement_rate=creator.engagement_rate,
+                current_gmv=float(creator.current_gmv or 0),
+                tiktok_handle=creator.tiktok_handle,
+                instagram_handle=creator.instagram_handle,
+                discord_handle=creator.discord_handle,
+                badges=[b for b in badges if b.status == "earned"],
+                badge_progress=None,  # Don't include progress for search results
+                total_campaigns=0,
+                completion_rate=0.0,
+                avg_rating=None,
+                created_at=creator.created_at,
+                last_active=creator.last_login,
+                is_verified=creator.email_verified
+            ))
+        
+        return results
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching public profile: {str(e)}")
+        logger.error(f"Error searching creators: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch creator profile"
-        )
-
-
-# Admin endpoints for creator management
-@router.post("/{creator_id}/badges/{badge_type}", summary="Award badge manually (Admin)")
-async def award_badge_manually(
-    creator_id: UUID = Path(..., description="Creator's user ID"),
-    badge_type: BadgeType = Path(..., description="Badge type to award"),
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
-) -> JSONResponse:
-    """
-    Manually award a badge to a creator.
-    
-    Note: This endpoint is only available for admin users.
-    
-    Args:
-        creator_id: UUID of the creator
-        badge_type: Type of badge to award
-        
-    Returns:
-        Success message
-    """
-    if not current_user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-    
-    try:
-        service = BadgeService(db)
-        badge = await service.award_badge_manually(
-            creator_id=creator_id,
-            badge_type=badge_type,
-            awarded_by=current_user.id
-        )
-        
-        return JSONResponse(
-            content={
-                "message": f"Badge {badge.badge_name} awarded successfully",
-                "badge_id": str(badge.id)
-            },
-            status_code=status.HTTP_201_CREATED
-        )
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-    except Exception as e:
-        logger.error(f"Error awarding badge: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to award badge"
+            detail="Failed to search creators"
         )

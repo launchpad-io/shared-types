@@ -68,14 +68,25 @@ class Settings(BaseSettings):
     SENDBLUE_API_KEY: Optional[str] = None
     SENDBLUE_API_URL: str = "https://api.sendblue.co/api/v1"
     
-    # External APIs
-    TIKTOK_API_KEY: Optional[str] = None
-    TIKTOK_API_SECRET: Optional[str] = None
-    DISCORD_BOT_TOKEN: Optional[str] = None
+    # TikTok Shop Integration (NEW)
+    TIKTOK_SHOP_API_KEY: Optional[str] = None
+    TIKTOK_SHOP_API_SECRET: Optional[str] = None
+    TIKTOK_SHOP_APP_ID: Optional[str] = None
+    TIKTOK_SHOP_SHOP_ID: Optional[str] = None
+    TIKTOK_SHOP_API_URL: str = "https://open-api.tiktokglobalshop.com"
     
-    # Stripe
+    # Discord Integration
+    DISCORD_BOT_TOKEN: Optional[str] = None
+    DISCORD_CLIENT_ID: Optional[str] = None
+    DISCORD_CLIENT_SECRET: Optional[str] = None
+    
+    # Stripe Payment
     STRIPE_SECRET_KEY: Optional[str] = None
     STRIPE_WEBHOOK_SECRET: Optional[str] = None
+    
+    # Fanbasis Payment (Alternative)
+    FANBASIS_API_KEY: Optional[str] = None
+    FANBASIS_API_URL: Optional[str] = None
     
     # Email/SMTP
     SMTP_HOST: Optional[str] = None
@@ -101,7 +112,7 @@ class Settings(BaseSettings):
                 return [ext.strip() for ext in self.ALLOWED_EXTENSIONS.split(",")]
         return self.ALLOWED_EXTENSIONS
     
-    # Celery
+    # Celery/Background Tasks
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
     
@@ -110,6 +121,19 @@ class Settings(BaseSettings):
     CREATOR_BADGE_CACHE_TTL: int = 3600
     CREATOR_MAX_PROFILE_UPDATES_PER_HOUR: int = 20
     CREATOR_ONBOARDING_REWARD_ENABLED: bool = True
+    
+    # Badge System Settings (NEW)
+    BADGE_CHECK_INTERVAL_HOURS: int = 24  # How often to check all creators for badges
+    BADGE_SYNC_BATCH_SIZE: int = 100  # Batch size for GMV sync
+    BADGE_PROGRESS_CACHE_TTL: int = 300  # 5 minutes
+    BADGE_LEADERBOARD_CACHE_TTL: int = 1800  # 30 minutes
+    BADGE_GMV_SYNC_ENABLED: bool = True  # Enable automatic GMV syncing
+    BADGE_NOTIFICATION_ENABLED: bool = True  # Enable badge achievement notifications
+    
+    # GMV Sync Settings (NEW)
+    GMV_SYNC_INTERVAL_HOURS: int = 1  # How often to sync recent GMV
+    GMV_FULL_SYNC_INTERVAL_DAYS: int = 1  # Full sync interval
+    GMV_MOCK_MODE: bool = False  # Use mock data when TikTok API not available
     
     model_config = SettingsConfigDict(
         env_file=".env",

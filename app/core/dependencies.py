@@ -12,7 +12,7 @@ from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.db.session import get_db
+from app.db.session import get_db  # FIXED: Changed from get_async_session to get_db
 from app.core.config import settings
 from app.models.user import User, UserRole
 from app.utils.logging import get_logger

@@ -6,8 +6,12 @@ Combines all endpoint routers
 from fastapi import APIRouter, Depends
 from app.core.dependencies import get_current_active_user
 
-# Only import the endpoints we have created
-from app.api.v1.endpoints import users, creators
+# Import all endpoint routers
+from app.api.v1.endpoints import (
+    users, 
+    creators, 
+    badges,  # NEW: Badge endpoints
+)
 
 # Create main API router
 api_router = APIRouter()
@@ -26,13 +30,22 @@ api_router.include_router(
     dependencies=[Depends(get_current_active_user)]
 )
 
+# NEW: Include badge router
+api_router.include_router(
+    badges.router,
+    prefix="/badges",
+    tags=["badges"],
+    dependencies=[Depends(get_current_active_user)]
+)
+
 # API health check
 @api_router.get("/", tags=["health"])
 async def api_root():
     return {
         "message": "TikTok Shop Creator CRM API v1",
         "status": "operational",
-        "documentation": "/docs"
+        "documentation": "/docs",
+        "version": "1.0.0"
     }
 
 @api_router.get("/status", tags=["health"])
@@ -43,6 +56,7 @@ async def api_status():
         "endpoints": {
             "users": "operational",
             "creators": "operational",
+            "badges": "operational",  # NEW
             # Add more as we implement them
             "auth": "not_implemented",
             "campaigns": "not_implemented",
@@ -63,6 +77,6 @@ async def api_status():
 # - deliverables router
 # - payments router
 # - analytics router
-# - integrations router
+# - integrations router (for TikTok Shop, Discord, etc.)
 # - notifications router
 # - admin router

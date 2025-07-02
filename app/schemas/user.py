@@ -8,6 +8,7 @@ from datetime import datetime, date
 from typing import Optional, Dict, List, Any, Annotated
 from uuid import UUID
 from enum import Enum
+from decimal import Decimal
 import re
 
 from pydantic import (
@@ -108,29 +109,25 @@ class AddressUpdate(BaseModel):
     city: Optional[Annotated[str, StringConstraints(min_length=2, max_length=100)]] = None
     state: Optional[Annotated[str, StringConstraints(min_length=2, max_length=100)]] = None
     postal_code: Optional[PostalCode] = None
-    country: Optional[Annotated[str, StringConstraints(min_length=2, max_length=100)]] = Field(None, description="ISO country code")
-
-    @field_validator("country")
-    @classmethod
-    def validate_country(cls, v: Optional[str]) -> Optional[str]:
-        """Validate country code"""
-        if v:
-            # List of supported countries (can be extended)
-            supported_countries = ["US", "CA", "GB", "AU", "NZ", "MX"]
-            v = v.upper()
-            if v not in supported_countries:
-                raise ValueError(f"Country must be one of: {', '.join(supported_countries)}")
-        return v
+    country: Optional[Annotated[str, StringConstraints(min_length=2, max_length=2)]] = Field(None, description="ISO 3166-1 alpha-2 country code")
 
     @model_validator(mode='after')
     def validate_complete_address(self) -> 'AddressUpdate':
-        """Ensure address is complete if any field is provided"""
-        address_fields = ["address_line1", "city", "state", "postal_code"]
-        provided_fields = [f for f in address_fields if getattr(self, f, None)]
+        """If any address field is provided, ensure minimum required fields"""
+        fields = [self.address_line1, self.city, self.state, self.postal_code, self.country]
+        provided = [f for f in fields if f is not None]
         
-        if provided_fields and len(provided_fields) < len(address_fields):
-            missing = set(address_fields) - set(provided_fields)
-            raise ValueError(f"Incomplete address. Missing fields: {', '.join(missing)}")
+        if provided and len(provided) < 5:
+            if not self.address_line1:
+                raise ValueError("Address line 1 is required when updating address")
+            if not self.city:
+                raise ValueError("City is required when updating address")
+            if not self.state:
+                raise ValueError("State is required when updating address")
+            if not self.postal_code:
+                raise ValueError("Postal code is required when updating address")
+            if not self.country:
+                raise ValueError("Country is required when updating address")
         
         return self
 
@@ -138,61 +135,37 @@ class AddressUpdate(BaseModel):
 class SocialMediaUpdate(BaseModel):
     """Schema for updating social media handles"""
     tiktok_handle: Optional[SocialHandle] = None
-    discord_handle: Optional[Annotated[str, StringConstraints(pattern=r'^.{2,32}#[0-9]{4}$|^[a-zA-Z0-9_.]{2,32}$')]] = None
+    discord_handle: Optional[SocialHandle] = None
     instagram_handle: Optional[SocialHandle] = None
-
-    @field_validator("tiktok_handle", "instagram_handle")
+    
+    @field_validator("tiktok_handle", "discord_handle", "instagram_handle", mode='before')
     @classmethod
-    def validate_social_handle(cls, v: Optional[str]) -> Optional[str]:
+    def clean_handle(cls, v: Optional[str]) -> Optional[str]:
         """Remove @ symbol if present"""
-        if v and v.startswith("@"):
+        if v and v.startswith('@'):
             return v[1:]
         return v
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "tiktok_handle": "creator123",
-                "discord_handle": "creator#1234",
-                "instagram_handle": "creator_insta"
-            }
-        }
-    )
 
 
 class CreatorDetailsUpdate(BaseModel):
     """Schema for updating creator-specific details"""
     content_niche: Optional[Annotated[str, StringConstraints(min_length=3, max_length=100)]] = None
-    follower_count: Optional[Annotated[int, Field(ge=0, le=1000000000)]] = None
-    average_views: Optional[Annotated[int, Field(ge=0, le=1000000000)]] = None
+    follower_count: Optional[int] = Field(None, ge=0, le=1000000000)
+    average_views: Optional[int] = Field(None, ge=0, le=1000000000)
     engagement_rate: Optional[float] = Field(None, ge=0, le=100)
-
-    @field_validator("content_niche")
+    
+    @field_validator("content_niche", mode='before')
     @classmethod
     def validate_niche(cls, v: Optional[str]) -> Optional[str]:
-        """Validate content niche from allowed list"""
-        if v:
-            allowed_niches = [
-                "fashion", "beauty", "lifestyle", "fitness", "food",
-                "travel", "tech", "gaming", "education", "entertainment",
-                "home", "pets", "parenting", "business", "other"
-            ]
-            v_lower = v.lower()
-            if v_lower not in allowed_niches:
-                raise ValueError(f"Content niche must be one of: {', '.join(allowed_niches)}")
-            return v_lower
-        return v
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "content_niche": "fashion",
-                "follower_count": 50000,
-                "average_views": 10000,
-                "engagement_rate": 5.5
-            }
-        }
-    )
+        """Validate content niche"""
+        valid_niches = [
+            "beauty", "fashion", "lifestyle", "food", "travel", 
+            "tech", "gaming", "fitness", "education", "entertainment",
+            "home", "pets", "parenting", "business", "other"
+        ]
+        if v and v.lower() not in valid_niches:
+            raise ValueError(f"Content niche must be one of: {', '.join(valid_niches)}")
+        return v.lower() if v else v
 
 
 class CompanyDetailsUpdate(BaseModel):
@@ -250,29 +223,36 @@ class UserProfileUpdate(BaseModel):
     city: Optional[Annotated[str, StringConstraints(min_length=2, max_length=100)]] = None
     state: Optional[Annotated[str, StringConstraints(min_length=2, max_length=100)]] = None
     postal_code: Optional[PostalCode] = None
-    country: Optional[Annotated[str, StringConstraints(min_length=2, max_length=100)]] = None
+    country: Optional[Annotated[str, StringConstraints(min_length=2, max_length=2)]] = None
     
     # Social media
     tiktok_handle: Optional[SocialHandle] = None
-    discord_handle: Optional[str] = None
+    discord_handle: Optional[SocialHandle] = None
     instagram_handle: Optional[SocialHandle] = None
     
+    # Creator specific
+    content_niche: Optional[str] = None
+    follower_count: Optional[int] = None
+    average_views: Optional[int] = None
+    engagement_rate: Optional[float] = None
+    
+    # Agency/Brand specific
+    company_name: Optional[str] = None
+    website_url: Optional[str] = None
+    tax_id: Optional[str] = None
+    
     # Preferences
-    timezone: Optional[str] = Field(None, description="IANA timezone string")
     notification_preferences: Optional[NotificationPreferences] = None
-
-    model_config = ConfigDict(
-        use_enum_values=True,
-        from_attributes=True
-    )
+    timezone: Optional[str] = None
 
 
 class ProfileCompletionItem(BaseModel):
-    """Schema for individual profile completion items"""
-    name: str
-    completed: bool
-    description: str
-    category: str = Field(..., description="Category: basic, personal, address, social, role_specific")
+    """Schema for profile completion checklist item"""
+    field_name: str
+    display_name: str
+    is_complete: bool
+    is_required: bool
+    description: Optional[str] = None
 
 
 class ProfileCompletionStatus(BaseModel):
@@ -301,6 +281,31 @@ class ProfileCompletionStatus(BaseModel):
                 ],
                 "next_steps": ["Complete your shipping address", "Add your phone number"]
             }
+        }
+    )
+
+
+class UserTokenCreate(BaseModel):
+    """Schema for creating user tokens"""
+    user_id: UUID
+    token_type: str = Field(..., description="Token type: oauth, reset_password, email_verification")
+    token_value: str
+    expires_at: Optional[datetime] = None
+
+
+class UserTokenResponse(BaseModel):
+    """Schema for user token response"""
+    id: UUID
+    user_id: UUID
+    token_type: str
+    expires_at: Optional[datetime]
+    is_used: bool
+    created_at: datetime
+    
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_encoders={
+            datetime: lambda v: v.isoformat()
         }
     )
 
@@ -347,6 +352,7 @@ class UserResponse(BaseModel):
     follower_count: Optional[int]
     average_views: Optional[int]
     engagement_rate: Optional[float]
+    current_gmv: Optional[float] = Field(None, description="Current total GMV")  # NEW FIELD
     
     # Agency/Brand specific
     company_name: Optional[str]
@@ -356,12 +362,17 @@ class UserResponse(BaseModel):
     profile_completion_percentage: int
     timezone: str
     
+    # Badge summary (NEW)
+    badges_earned: Optional[int] = Field(None, description="Number of badges earned")
+    highest_badge: Optional[str] = Field(None, description="Highest badge achieved")
+    
     model_config = ConfigDict(
         from_attributes=True,
         use_enum_values=True,
         json_encoders={
             datetime: lambda v: v.isoformat(),
-            date: lambda v: v.isoformat()
+            date: lambda v: v.isoformat(),
+            Decimal: lambda v: float(v)
         }
     )
 
@@ -384,4 +395,15 @@ class UserListResponse(BaseModel):
                 "pages": 5
             }
         }
+    )
+
+
+class UserWithBadgesResponse(UserResponse):
+    """Extended user response including badge details"""
+    badges: Optional[List[Dict[str, Any]]] = Field(None, description="List of earned badges")
+    badge_progress: Optional[Dict[str, Any]] = Field(None, description="Progress to next badge")
+    
+    model_config = ConfigDict(
+        from_attributes=True,
+        use_enum_values=True
     )

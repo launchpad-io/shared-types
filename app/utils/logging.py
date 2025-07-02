@@ -1,36 +1,47 @@
 """
-Logging configuration for TikTok Shop Creator CRM
-Provides structured logging with proper formatting and levels
+Logging configuration and utilities
 """
 
 import logging
 import sys
 from typing import Optional
-from functools import lru_cache
+from app.core.config import settings
+
+# Configure logging format
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-@lru_cache()
-def get_logger(name: str) -> logging.Logger:
+def setup_logging():
+    """Set up logging configuration"""
+    logging.basicConfig(
+        level=getattr(logging, settings.LOG_LEVEL.upper()),
+        format=LOG_FORMAT,
+        datefmt=DATE_FORMAT,
+        stream=sys.stdout
+    )
+    
+    # Set specific loggers
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    
+    # Disable noisy loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def get_logger(name: Optional[str] = None) -> logging.Logger:
     """
-    Get or create a logger instance with consistent configuration.
+    Get a logger instance
     
     Args:
         name: Logger name (usually __name__)
         
     Returns:
-        Configured logger instance
+        Logger instance
     """
-    logger = logging.getLogger(name)
-    
-    # Only configure if handlers haven't been added
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-        )
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-    
-    return logger
+    return logging.getLogger(name or __name__)
+
+
+# Setup logging on import
+setup_logging()
