@@ -1,0 +1,93 @@
+# Core Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.25
+asyncpg==0.29.0
+alembic==1.13.1
+# Note: psycopg2-binary removed as you're using asyncpg for async PostgreSQL
+
+# Pydantic & Settings
+pydantic==2.5.3
+pydantic-settings==2.1.0
+pydantic[email]==2.5.3
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.2
+
+# Redis & Caching
+redis==5.0.1
+
+# HTTP Clients
+httpx==0.26.0
+aiohttp==3.9.1
+# Note: requests removed as httpx handles both sync/async
+
+# Data Processing
+python-dateutil==2.8.2
+pytz==2023.3
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+faker==22.0.0
+
+# Development Tools
+black==23.12.1
+flake8==7.0.0
+isort==5.13.2
+mypy==1.8.0
+pre-commit==3.6.0
+
+# Logging & Monitoring
+python-json-logger==2.0.7
+# Note: Sentry is optional, uncomment if needed
+# sentry-sdk[fastapi]==1.39.1
+
+# SMS - SendBlue (as mentioned in your project)
+# Note: You'll need to add sendblue package when available
+# For now, using httpx for API calls
+
+# Environment & Config
+python-dotenv==1.0.0
+
+# Rate Limiting
+slowapi==0.1.9
+
+# Utilities
+python-slugify==8.0.1
+validators==0.22.0
+
+# Background Jobs (if needed)
+# celery==5.3.4
+# apscheduler==3.10.4
+
+# Optional: Only include if actually using these features
+# =====================================
+# File Processing (uncomment if needed)
+# pandas==2.1.4
+# openpyxl==3.1.2
+# xlsxwriter==3.1.9
+
+# Email (uncomment if needed)
+# emails==0.6
+
+# Discord Integration (uncomment if needed)
+# discord.py==2.3.2
+
+# Stripe Payment (uncomment if needed)
+# stripe==7.10.0
+
+# WebSocket Support (uncomment if needed)
+# websockets==12.0
+# python-socketio==5.11.0
+
+# Image Processing (uncomment if needed)
+# pillow==10.2.0
+# qrcode==7.4.2
