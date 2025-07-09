@@ -1,335 +1,205 @@
+# shared-types/app/core/dependencies.py
 """
-Core dependencies for FastAPI
-Handles authentication, database sessions, and common dependencies
+Core dependencies for FastAPI - Unified version
+Consolidates auth and database dependencies
 """
 
-from typing import Optional, Generator, List
-from uuid import UUID
+# Re-export everything from auth module for backward compatibility
+from app.core.auth import (
+    get_current_user,
+    get_current_active_user,
+    get_current_verified_user,
+    get_optional_user,
+    require_admin,
+    require_agency,
+    require_creator,
+    require_brand,
+    require_admin_role,
+    require_agency_role,
+    require_creator_role,
+    require_brand_role,
+    RoleChecker,
+    PermissionChecker,
+    ScopeChecker,
+    require_permission,
+    require_scopes,
+    security,
+    GetOptionalUser,
+    GetCurrentUser,
+    GetCurrentActiveUser,
+    GetCurrentVerifiedUser
+)
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+# Database dependencies
+from app.db.session import get_db, get_db_context
+
+# Additional dependencies
+from typing import Optional, AsyncGenerator
+from fastapi import Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from app.db.session import get_db  # FIXED: Changed from get_async_session to get_db
 from app.core.config import settings
-from app.models.user import User, UserRole
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Security scheme
-security = HTTPBearer()
+
+async def get_request_id(request: Request) -> str:
+    """Get or generate request ID for tracing"""
+    return request.headers.get("X-Request-ID", "")
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: AsyncSession = Depends(get_db)
-) -> User:
-    """
-    Get current user from JWT token.
-    
-    Args:
-        credentials: Bearer token from request
-        db: Database session
-        
-    Returns:
-        Current user object
-        
-    Raises:
-        HTTPException: If token is invalid or user not found
-    """
-    token = credentials.credentials
-    
-    try:
-        payload = jwt.decode(
-            token, 
-            settings.SECRET_KEY, 
-            algorithms=[settings.ALGORITHM]
+async def check_maintenance_mode() -> None:
+    """Check if application is in maintenance mode"""
+    # This could check Redis or a config flag
+    if getattr(settings, 'MAINTENANCE_MODE', False):
+        from app.core.exceptions import ServiceUnavailableException
+        raise ServiceUnavailableException(
+            detail="System is under maintenance. Please try again later."
         )
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication token",
-                headers={"WWW-Authenticate": "Bearer"},
+
+
+class FeatureFlag:
+    """Check if a feature is enabled"""
+    
+    def __init__(self, flag_name: str):
+        self.flag_name = flag_name
+    
+    async def __call__(self) -> bool:
+        """
+        Check feature flag
+        For now, this uses environment variables or config
+        Later can be extended to use Redis or database
+        """
+        # Check in settings/environment
+        flag_env_name = f"FEATURE_{self.flag_name.upper()}_ENABLED"
+        is_enabled = getattr(settings, flag_env_name, False)
+        
+        # Could also check in database or cache here
+        return bool(is_enabled)
+
+
+def require_feature(flag_name: str):
+    """Require a feature to be enabled"""
+    async def check_feature(
+        is_enabled: bool = Depends(FeatureFlag(flag_name))
+    ):
+        if not is_enabled:
+            from app.core.exceptions import ForbiddenException
+            raise ForbiddenException(
+                detail=f"Feature '{flag_name}' is not enabled"
             )
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Get user from database
-    result = await db.execute(
-        select(User).where(User.id == UUID(user_id))
-    )
-    user = result.scalar_one_or_none()
-    
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    return user
+    return check_feature
 
 
-async def get_current_active_user(
-    current_user: User = Depends(get_current_user)
-) -> User:
-    """
-    Get current active user.
-    
-    Args:
-        current_user: User from token
-        
-    Returns:
-        Active user object
-        
-    Raises:
-        HTTPException: If user is not active
-    """
-    if not current_user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user"
-        )
-    return current_user
-
-
-async def get_current_verified_user(
-    current_user: User = Depends(get_current_active_user)
-) -> User:
-    """
-    Get current verified user.
-    
-    Args:
-        current_user: Current active user
-        
-    Returns:
-        Verified user object
-        
-    Raises:
-        HTTPException: If user email is not verified
-    """
-    if not current_user.email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email not verified",
-        )
-    return current_user
-
-
-async def get_optional_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+# Service health check dependency
+async def check_service_health(
     db: AsyncSession = Depends(get_db)
-) -> Optional[User]:
-    """
-    Get user if authenticated, None otherwise.
-    
-    Args:
-        credentials: Optional bearer token
-        db: Database session
-        
-    Returns:
-        User object or None
-    """
-    if not credentials:
-        return None
-    
-    try:
-        return await get_current_user(credentials, db)
-    except HTTPException:
-        return None
-
-
-async def require_creator_role(
-    current_user: User = Depends(get_current_active_user)
-) -> User:
-    """
-    Require user to have creator role.
-    
-    Args:
-        current_user: Current active user
-        
-    Returns:
-        User with creator role
-        
-    Raises:
-        HTTPException: If user is not a creator
-    """
-    if current_user.role != UserRole.CREATOR:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Creator access required"
-        )
-    return current_user
-
-
-async def require_admin_role(
-    current_user: User = Depends(get_current_active_user)
-) -> User:
-    """
-    Require user to have admin role.
-    
-    Args:
-        current_user: Current active user
-        
-    Returns:
-        User with admin role
-        
-    Raises:
-        HTTPException: If user is not an admin
-    """
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-    return current_user
-
-
-async def require_agency_role(
-    current_user: User = Depends(get_current_active_user)
-) -> User:
-    """
-    Require user to have agency role.
-    
-    Args:
-        current_user: Current active user
-        
-    Returns:
-        User with agency role
-        
-    Raises:
-        HTTPException: If user is not an agency
-    """
-    if current_user.role != UserRole.AGENCY:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Agency access required"
-        )
-    return current_user
-
-
-async def require_brand_role(
-    current_user: User = Depends(get_current_active_user)
-) -> User:
-    """
-    Require user to have brand role.
-    
-    Args:
-        current_user: Current active user
-        
-    Returns:
-        User with brand role
-        
-    Raises:
-        HTTPException: If user is not a brand
-    """
-    if current_user.role != UserRole.BRAND:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Brand access required"
-        )
-    return current_user
-
-
-class RoleChecker:
-    """
-    Dependency class to check user roles.
-    
-    Usage:
-        @router.get("/admin", dependencies=[Depends(RoleChecker(["admin"]))])
-    """
-    
-    def __init__(self, allowed_roles: List[str]):
-        self.allowed_roles = allowed_roles
-    
-    async def __call__(
-        self,
-        current_user: User = Depends(get_current_active_user)
-    ) -> User:
-        if current_user.role not in self.allowed_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Required role: {', '.join(self.allowed_roles)}",
-            )
-        return current_user
-
-
-def has_permission(user: User, resource: str, action: str) -> bool:
-    """
-    Check if user has permission for resource and action.
-    
-    Args:
-        user: User to check
-        resource: Resource name
-        action: Action name (read, write, delete)
-        
-    Returns:
-        True if user has permission
-    """
-    # Implement role-based permissions
-    permissions = {
-        UserRole.ADMIN: ["*"],  # Admin has all permissions
-        UserRole.CREATOR: [
-            "profile:read", "profile:write",
-            "badges:read", "demographics:read", "demographics:write",
-            "campaigns:read", "deliverables:write"
-        ],
-        UserRole.AGENCY: [
-            "campaigns:*", "creators:read", "analytics:read",
-            "profile:read", "profile:write"
-        ],
-        UserRole.BRAND: [
-            "campaigns:read", "creators:read", "analytics:read",
-            "profile:read", "profile:write"
-        ]
+) -> dict:
+    """Check health of all dependencies"""
+    health = {
+        "database": "unknown",
+        "status": "unhealthy"
     }
     
-    user_permissions = permissions.get(user.role, [])
-    permission_string = f"{resource}:{action}"
+    # Check database
+    try:
+        await db.execute("SELECT 1")
+        health["database"] = "healthy"
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        health["database"] = "unhealthy"
     
-    # Check for wildcard permissions
-    if "*" in user_permissions:
-        return True
+    # Overall status
+    if health["database"] == "healthy":
+        health["status"] = "healthy"
     
-    # Check for resource wildcard (e.g., "campaigns:*")
-    resource_wildcard = f"{resource}:*"
-    if resource_wildcard in user_permissions:
-        return True
-    
-    # Check for exact permission
-    return permission_string in user_permissions
+    return health
 
 
-# Convenience dependencies using RoleChecker
-require_admin = Depends(RoleChecker(["admin"]))
-require_agency = Depends(RoleChecker(["agency", "admin"]))
-require_creator = Depends(RoleChecker(["creator"]))
-require_brand = Depends(RoleChecker(["brand", "admin"]))
+# API versioning dependency
+class APIVersion:
+    """Extract and validate API version from request"""
+    
+    def __init__(self, supported_versions: list = None):
+        self.supported_versions = supported_versions or ["v1"]
+    
+    async def __call__(self, request: Request) -> str:
+        """Extract API version from path or header"""
+        # Try to get from path first
+        path_parts = request.url.path.split("/")
+        for part in path_parts:
+            if part in self.supported_versions:
+                return part
+        
+        # Try header
+        version = request.headers.get("X-API-Version", "v1")
+        if version not in self.supported_versions:
+            from app.core.exceptions import BadRequestException
+            raise BadRequestException(
+                detail=f"Unsupported API version: {version}"
+            )
+        
+        return version
+
+
+# Pagination dependencies
+class PaginationParams:
+    """Common pagination parameters"""
+    
+    def __init__(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        max_page_size: int = 100
+    ):
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 20
+        if page_size > max_page_size:
+            page_size = max_page_size
+        
+        self.page = page
+        self.page_size = page_size
+        self.offset = (page - 1) * page_size
+        self.limit = page_size
 
 
 # Export all dependencies
 __all__ = [
+    # Auth dependencies
     "get_current_user",
     "get_current_active_user",
     "get_current_verified_user",
     "get_optional_user",
-    "require_creator_role",
-    "require_admin_role",
-    "require_agency_role",
-    "require_brand_role",
-    "RoleChecker",
-    "has_permission",
     "require_admin",
     "require_agency",
     "require_creator",
     "require_brand",
+    "require_admin_role",
+    "require_agency_role",
+    "require_creator_role",
+    "require_brand_role",
+    "RoleChecker",
+    "PermissionChecker",
+    "ScopeChecker",
+    "require_permission",
+    "require_scopes",
+    "security",
+    "GetOptionalUser",
+    "GetCurrentUser",
+    "GetCurrentActiveUser",
+    "GetCurrentVerifiedUser",
+    # Database dependencies
     "get_db",
-    "security"
+    "get_db_context",
+    # Additional dependencies
+    "get_request_id",
+    "check_maintenance_mode",
+    "FeatureFlag",
+    "require_feature",
+    "check_service_health",
+    "APIVersion",
+    "PaginationParams",
 ]
