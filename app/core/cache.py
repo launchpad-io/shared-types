@@ -1,4 +1,4 @@
-# shared-types/app/core/cache.py
+# app/core/cache.py
 """
 Enhanced cache module with Redis support and fallback
 """
@@ -12,6 +12,7 @@ from datetime import timedelta
 from contextlib import asynccontextmanager
 import asyncio
 import secrets
+import time
 
 # Redis is optional - will work without it
 try:
@@ -145,7 +146,6 @@ class MemoryBackend(CacheBackend):
     
     async def get(self, key: str) -> Optional[Any]:
         # Check expiration
-        import time
         if key in self._expires and self._expires[key] < time.time():
             await self.delete(key)
             return None
@@ -156,7 +156,6 @@ class MemoryBackend(CacheBackend):
         self._cache[key] = value
         
         if expire:
-            import time
             self._expires[key] = time.time() + expire
     
     async def delete(self, key: str) -> None:
@@ -168,7 +167,6 @@ class MemoryBackend(CacheBackend):
     
     async def expire(self, key: str, seconds: int) -> None:
         if key in self._cache:
-            import time
             self._expires[key] = time.time() + seconds
     
     async def clear_pattern(self, pattern: str) -> int:
@@ -369,7 +367,6 @@ def cached(
         @wraps(func)
         def sync_wrapper(*args, **kwargs):
             # For sync functions, we need to run in async context
-            import asyncio
             loop = asyncio.get_event_loop()
             return loop.run_until_complete(async_wrapper(*args, **kwargs))
         
@@ -436,6 +433,3 @@ __all__ = [
 # Backward compatibility
 cache_key_wrapper = cached  # Old name
 cache = cached  # Alias for decorator usage in routers
-
-import asyncio
-import secrets

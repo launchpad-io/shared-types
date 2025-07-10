@@ -1,4 +1,4 @@
-# shared-types/app/core/__init__.py
+# app/core/__init__.py
 """
 Core module for shared functionality across microservices
 """
@@ -166,6 +166,7 @@ __all__ = [
     "get_cache",
     "cached",
     "cache_key",
+    "cache",
     # Rate Limiting
     "limiter",
     "rate_limit",

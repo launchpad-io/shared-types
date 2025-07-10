@@ -28,6 +28,9 @@ class UserRole(str, PyEnum):
     BRAND = "brand"
     ADMIN = "admin"
 
+    def __str__(self):
+        return self.value
+
 
 class GenderType(str, PyEnum):
     """Gender type enumeration"""
@@ -65,7 +68,12 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     
     # Role and status
-    role = Column(Enum(UserRole, name="user_role", schema="users"), nullable=False)
+    # Role and status
+    role = Column(
+        Enum(UserRole, name="user_role", schema="users", values_callable=lambda obj: [e.value for e in obj]),
+        nullable=False
+    )
+    
     is_active = Column(Boolean, default=True, nullable=False)
     email_verified = Column(Boolean, default=False, nullable=False)
     

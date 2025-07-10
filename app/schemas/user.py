@@ -309,70 +309,43 @@ class UserTokenResponse(BaseModel):
         }
     )
 
-
 class UserResponse(BaseModel):
-    """Schema for user response"""
+    """Schema for user response with complete profile information"""
     id: UUID
     email: EmailStr
     username: str
     role: UserRole
-    is_active: bool
-    email_verified: bool
+    is_active: bool = True
+    email_verified: bool = False
+    
+    # Profile fields
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[GenderType] = None
+    profile_image_url: Optional[str] = None
+    bio: Optional[str] = None
+    
+    # Timestamps
     created_at: datetime
     updated_at: datetime
-    last_login: Optional[datetime]
+    last_login: Optional[datetime] = None
     
-    # Profile info
-    first_name: Optional[str]
-    last_name: Optional[str]
-    full_name: Optional[str]
-    phone: Optional[str]
-    date_of_birth: Optional[date]
-    gender: Optional[GenderType]
-    profile_image_url: Optional[str]
-    bio: Optional[str]
-    
-    # Address
-    address_line1: Optional[str]
-    address_line2: Optional[str]
-    city: Optional[str]
-    state: Optional[str]
-    postal_code: Optional[str]
-    country: Optional[str]
-    has_complete_address: bool
-    
-    # Social media
-    tiktok_handle: Optional[str]
-    discord_handle: Optional[str]
-    instagram_handle: Optional[str]
-    has_social_media_connected: bool
-    
-    # Creator specific
-    content_niche: Optional[str]
-    follower_count: Optional[int]
-    average_views: Optional[int]
-    engagement_rate: Optional[float]
-    current_gmv: Optional[float] = Field(None, description="Current total GMV")  # NEW FIELD
-    
-    # Agency/Brand specific
-    company_name: Optional[str]
-    website_url: Optional[str]
-    
-    # Meta
-    profile_completion_percentage: int
-    timezone: str
-    
-    # Badge summary (NEW)
-    badges_earned: Optional[int] = Field(None, description="Number of badges earned")
-    highest_badge: Optional[str] = Field(None, description="Highest badge achieved")
+    # Add other fields as needed...
     
     model_config = ConfigDict(
         from_attributes=True,
+        # This is important for SQLAlchemy models
+        arbitrary_types_allowed=True,
+        # Validate on assignment
+        validate_assignment=True,
+        # Use enum values in JSON
         use_enum_values=True,
+        # Serialize datetime as ISO format
         json_encoders={
-            datetime: lambda v: v.isoformat(),
-            date: lambda v: v.isoformat(),
-            Decimal: lambda v: float(v)
+            datetime: lambda v: v.isoformat() if v else None,
+            date: lambda v: v.isoformat() if v else None,
         }
     )
 

@@ -388,7 +388,7 @@ async def get_badge_leaderboard(
     """
     try:
         from sqlalchemy import select, func, desc
-        from app.models.badge import CreatorBadge
+        from app.models.creator import CreatorBadge
         
         # Query to get creators with badge counts
         query = (

@@ -1,4 +1,4 @@
-# shared-types/app/core/security.py
+# app/core/security.py
 """
 Unified Security Service for TikTok Shop CRM
 Handles authentication, authorization, and cryptographic operations
@@ -400,6 +400,7 @@ except ImportError:
         jwt_refresh_secret_key="test-refresh-secret-key"
     )
     security_service = SecurityService(_default_config)
+
 # Convenience exports
 hash_password = security_service.hash_password
 verify_password = security_service.verify_password

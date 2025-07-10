@@ -1,4 +1,4 @@
-# shared-types/app/core/dependencies.py
+# app/core/dependencies.py
 """
 Core dependencies for FastAPI - Unified version
 Consolidates auth and database dependencies

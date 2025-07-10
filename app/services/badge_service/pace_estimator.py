@@ -12,7 +12,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
-from app.models.badge import CreatorBadge
+from app.models.creator import CreatorBadge
 from app.services.badge_service.gmv_calculator import GMVCalculator
 from app.utils.badge_constants import BADGE_TIERS
 from app.schemas.badge import PaceEstimateResponse

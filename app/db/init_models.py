@@ -12,7 +12,7 @@ from app.models.creator import CreatorBadge, CreatorAudienceDemographic  # noqa
 
 # Try to import badge model if it exists separately
 try:
-    from app.models.badge import CreatorBadge as Badge  # noqa
+    from app.models.creator import CreatorBadge as Badge  # noqa
 except ImportError:
     pass  # Badge model might not exist as a separate file
 

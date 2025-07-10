@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.user import User
-from app.models.badge import CreatorBadge
+from app.models.creator import CreatorBadge
 from app.schemas.badge import (
     BadgeResponse,
     BadgeProgressResponse,

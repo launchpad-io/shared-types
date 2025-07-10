@@ -1,4 +1,4 @@
-# shared-types/app/core/auth.py
+# app/core/auth.py
 """
 Authentication module using unified security service
 Provides user authentication and authorization dependencies

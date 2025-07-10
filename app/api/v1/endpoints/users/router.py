@@ -50,6 +50,7 @@ class PhoneNumberRequest(BaseModel):
 class VerificationCodeRequest(BaseModel):
     verification_code: str
 
+# In app/api/v1/endpoints/users/router.py, update the get_current_user_profile endpoint:
 
 @router.get("/me", response_model=UserResponse, summary="Get current user profile")
 async def get_current_user_profile(
@@ -63,9 +64,33 @@ async def get_current_user_profile(
         UserResponse: Complete user profile with all fields
     """
     try:
-        # Since we already have the current_user, we can return it directly
-        # In a real implementation, you might want to load additional relations
-        return UserResponse.model_validate(current_user)
+        # Make sure all attributes are loaded before serialization
+        # This prevents the MissingGreenlet error
+        await db.refresh(current_user)
+        
+        # Convert to dict first to avoid lazy loading issues
+        user_dict = {
+            "id": current_user.id,
+            "email": current_user.email,
+            "username": current_user.username,
+            "role": current_user.role,
+            "is_active": current_user.is_active,
+            "email_verified": current_user.email_verified,
+            "first_name": current_user.first_name,
+            "last_name": current_user.last_name,
+            "phone": current_user.phone,
+            "date_of_birth": current_user.date_of_birth,
+            "gender": current_user.gender,
+            "profile_image_url": current_user.profile_image_url,
+            "bio": current_user.bio,
+            "created_at": current_user.created_at,
+            "updated_at": current_user.updated_at,
+            "last_login": current_user.last_login,
+            # Add other fields as needed
+        }
+        
+        return UserResponse(**user_dict)
+        
     except Exception as e:
         logger.error(f"Error fetching user profile: {str(e)}")
         raise HTTPException(

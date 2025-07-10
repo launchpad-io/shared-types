@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.user import User
-from app.models.badge import CreatorBadge
+from app.models.creator import CreatorBadge
 from app.utils.badge_constants import BADGE_TIERS, BadgeTier
 from app.schemas.badge import BadgeProgressResponse, ProgressDetails
 from app.utils.logging import get_logger

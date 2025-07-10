@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.session import async_session_maker
 from app.models.user import User, UserRole
-from app.models.badge import CreatorBadge
+from app.models.creator import CreatorBadge
 from app.services.badge_service import BadgeService, GMVCalculator
 # from app.services.notification_service.badge_notification_service import BadgeNotificationService
 from app.utils.logging import get_logger
