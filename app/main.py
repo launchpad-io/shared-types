@@ -34,6 +34,11 @@ if settings.SENTRY_DSN:
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up...")
+    # Log all routes for debugging
+    logger.info("Registered routes:")
+    for route in app.routes:
+        if hasattr(route, "methods") and hasattr(route, "path"):
+            logger.info(f"  {route.methods} {route.path}")
     yield
     # Shutdown
     logger.info("Shutting down...")
@@ -85,7 +90,16 @@ async def readiness_check():
         return {"status": "ready"}
     except Exception as e:
         logger.error(f"Readiness check failed: {e}")
-        return {"status": "not ready"}, 503
+        return {"status": "not ready", "error": str(e)}, 503
+
+# Root endpoint
+@app.get("/")
+async def root():
+    return {
+        "message": f"Welcome to {settings.APP_NAME}",
+        "version": settings.VERSION,
+        "docs": "/docs" if settings.DEBUG else "Disabled in production"
+    }
 
 # Include routers
 from app.api.v1.api import api_router

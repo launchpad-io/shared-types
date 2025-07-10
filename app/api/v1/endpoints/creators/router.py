@@ -2,7 +2,6 @@
 Creator-specific API endpoints for TikTok Shop Creator CRM
 Handles creator profiles, demographics, and integrates with badge system.
 """
-##app/core/api/v1/endpoints/creators/router.py
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime, timedelta
@@ -26,7 +25,6 @@ from app.schemas.creator import (
     CreatorLeaderboardResponse,
     CreatorAnalyticsSummary,
     CreatorProfileResponse,
-    # NEW demographics schemas
     DemographicsVisualizationData,
     DemographicsAnalytics,
     CreatorDemographicsProfile
@@ -46,9 +44,8 @@ from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Create router WITHOUT prefix (prefix will be added in api.py)
 router = APIRouter(
-    prefix="/creators",
-    tags=["creators"],
     responses={
         401: {"description": "Not authenticated"},
         403: {"description": "Not a creator"},
@@ -57,8 +54,7 @@ router = APIRouter(
     }
 )
 
-
-# Profile endpoints (EXISTING - NO CHANGES)
+# Profile endpoints
 @router.get("/profile", response_model=CreatorProfileResponse, 
            summary="Get current creator's profile")
 async def get_creator_profile(
@@ -126,8 +122,7 @@ async def get_creator_profile(
             detail="Failed to fetch creator profile"
         )
 
-
-# Badge endpoints (EXISTING - NO CHANGES)
+# Badge endpoints
 @router.get("/badges", response_model=List[BadgeResponse], 
            summary="Get creator's badges")
 async def get_creator_badges(
@@ -150,7 +145,6 @@ async def get_creator_badges(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch badges"
         )
-
 
 @router.get("/badges/progress", response_model=BadgeProgressResponse, 
            summary="Get badge progress")
@@ -176,7 +170,6 @@ async def get_badge_progress(
             detail="Failed to fetch badge progress"
         )
 
-
 @router.get("/badges/history", response_model=List[BadgeHistoryResponse], 
            summary="Get badge history")
 async def get_badge_history(
@@ -199,7 +192,6 @@ async def get_badge_history(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch badge history"
         )
-
 
 @router.get("/badges/showcase", response_model=BadgeShowcaseResponse, 
            summary="Get badge showcase")
@@ -245,8 +237,7 @@ async def get_badge_showcase(
             detail="Failed to fetch badge showcase"
         )
 
-
-# Audience Demographics endpoints (ENHANCED)
+# Audience Demographics endpoints
 @router.get("/demographics", response_model=List[AudienceDemographicResponse],
            summary="Get audience demographics")
 async def get_audience_demographics(
@@ -269,7 +260,6 @@ async def get_audience_demographics(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch audience demographics"
         )
-
 
 @router.put("/demographics/bulk", response_model=List[AudienceDemographicResponse],
            summary="Bulk update demographics")
@@ -306,8 +296,7 @@ async def bulk_update_demographics(
             detail="Failed to update demographics"
         )
 
-
-# NEW: Enhanced demographics endpoints
+# Enhanced demographics endpoints
 @router.get("/demographics/visualization", 
            response_model=DemographicsVisualizationData,
            summary="Get demographics visualization data")
@@ -333,7 +322,6 @@ async def get_demographics_visualization(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get visualization data"
         )
-
 
 @router.get("/demographics/analytics",
            response_model=DemographicsAnalytics,
@@ -366,7 +354,6 @@ async def get_demographics_analytics(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get demographics analytics"
         )
-
 
 @router.get("/demographics/profile",
            response_model=CreatorDemographicsProfile,
@@ -409,8 +396,7 @@ async def get_demographics_profile(
             detail="Failed to get demographics profile"
         )
 
-
-# Performance metrics endpoints (EXISTING - NO CHANGES)
+# Performance metrics endpoints
 @router.get("/performance", response_model=CreatorPerformanceMetrics,
            summary="Get performance metrics")
 @cache(expire=600)  # Cache for 10 minutes
@@ -470,8 +456,7 @@ async def get_performance_metrics(
             detail="Failed to fetch performance metrics"
         )
 
-
-# Analytics endpoints (EXISTING - NO CHANGES)
+# Analytics endpoints
 @router.get("/analytics/summary", response_model=CreatorAnalyticsSummary,
            summary="Get analytics summary")
 async def get_analytics_summary(
@@ -507,8 +492,7 @@ async def get_analytics_summary(
             detail="Failed to fetch analytics"
         )
 
-
-# Leaderboard endpoints (EXISTING - NO CHANGES)
+# Leaderboard endpoints
 @router.get("/leaderboard", response_model=CreatorLeaderboardResponse,
            summary="Get creator leaderboard")
 @cache(expire=1800)  # Cache for 30 minutes
@@ -552,8 +536,7 @@ async def get_creator_leaderboard(
             detail="Failed to fetch leaderboard"
         )
 
-
-# Search creators (EXISTING - NO CHANGES)
+# Search creators
 @router.get("/search", response_model=List[CreatorProfileResponse],
            summary="Search creators")
 async def search_creators(
@@ -582,7 +565,7 @@ async def search_creators(
     """
     try:
         # Only agencies and brands can search creators
-        if current_user.role not in [UserRole.agency, UserRole.brand, UserRole.admin]:
+        if current_user.role not in [UserRole.AGENCY, UserRole.BRAND, UserRole.ADMIN]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only agencies and brands can search creators"
@@ -648,3 +631,21 @@ async def search_creators(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to search creators"
         )
+
+# Health check
+@router.get("/health")
+async def health_check():
+    """Health check for creators module"""
+    return {
+        "status": "healthy",
+        "module": "creators",
+        "endpoints": [
+            "/profile",
+            "/badges",
+            "/demographics",
+            "/performance",
+            "/analytics",
+            "/leaderboard",
+            "/search"
+        ]
+    }

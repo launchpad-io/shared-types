@@ -287,10 +287,18 @@ class ScopeChecker:
 
 
 # Convenience role checkers
-require_admin = RoleChecker(["admin"])
-require_agency = RoleChecker(["agency", "admin"])
-require_creator = RoleChecker(["creator"])
-require_brand = RoleChecker(["brand", "admin"])
+# To functions that return instances:
+def require_admin():
+    return RoleChecker(["admin"])
+
+def require_agency():
+    return RoleChecker(["agency", "admin"])
+
+def require_creator():
+    return RoleChecker(["creator"])
+
+def require_brand():
+    return RoleChecker(["brand", "admin"])
 
 # Permission helpers
 def require_permission(resource: str, action: str):
@@ -303,16 +311,16 @@ def require_scopes(scopes: List[str]):
 
 # Backward compatibility aliases
 def require_admin_role():
-    return require_admin
+    return require_admin()
 
 def require_agency_role():
-    return require_agency
+    return require_agency()
 
 def require_creator_role():
-    return require_creator
+    return require_creator()
 
 def require_brand_role():
-    return require_brand
+    return require_brand()
 
 # For endpoints that need the user or None
 GetOptionalUser = Annotated[Optional[User], Depends(get_optional_user)]
