@@ -2,6 +2,7 @@
 API V1 Router
 Combines all endpoint routers
 """
+#app/api/v1/api.py
 from fastapi import APIRouter, Depends
 from app.core.dependencies import get_current_active_user
 
@@ -16,11 +17,11 @@ from app.api.v1.endpoints.demographics import router as demographics_router
 api_router = APIRouter()
 
 # Include auth router (no auth required for auth endpoints)
-api_router.include_router(
-    auth_router,
-    prefix="/auth",
-    tags=["authentication"]
-)
+# api_router.include_router(
+#     auth_router,
+#     prefix="/auth",
+#     tags=["authentication"]
+# )
 
 # Include users router
 api_router.include_router(

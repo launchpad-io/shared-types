@@ -1,399 +1,248 @@
+# app/services/demographics_service.py
 """
-Core Demographics Service
-Manages creator audience demographics CRUD operations
+Demographics service layer for business logic
 """
-
-from typing import List, Optional, Dict, Any
-from uuid import UUID
-from datetime import datetime
-from decimal import Decimal
-
-from sqlalchemy import select, delete, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, func, and_, delete
+from typing import List, Dict, Optional, Tuple
+from decimal import Decimal
+import uuid
+from datetime import datetime, timedelta
 
-from app.models.creator import CreatorAudienceDemographic, AgeGroup, GenderType
-from app.models.user import User
-from app.schemas.creator import (
-    AudienceDemographicCreate,
-    AudienceDemographicResponse,
-    AudienceDemographicsBulkUpdate
-)
-from app.services.demographics.validator import DemographicsValidator
-from app.core.cache import cache
-from app.utils.logging import get_logger
-from app.core.exceptions import (
-    NotFoundException,
-    ValidationException,
-    BusinessLogicException
-)
-
-logger = get_logger(__name__)
-
+from app.models.demographics import CreatorAudienceDemographics, GenderType
+from app.schemas.demographics import DemographicsInsight
 
 class DemographicsService:
-    """Service for managing creator audience demographics"""
+    """Service class for demographics operations"""
     
-    def __init__(self, session: AsyncSession):
-        self.session = session
-        self.validator = DemographicsValidator()
+    def __init__(self, db: AsyncSession):
+        self.db = db
     
-    async def get_demographics(self, creator_id: UUID) -> List[CreatorAudienceDemographic]:
-        """
-        Get all demographics for a creator
-        
-        Args:
-            creator_id: UUID of the creator
-            
-        Returns:
-            List of demographic entries
-            
-        Raises:
-            NotFoundException: If creator not found
-        """
-        # Check if creator exists
-        creator = await self._get_creator(creator_id)
-        if not creator:
-            raise NotFoundException(f"Creator {creator_id} not found")
-        
-        # Try cache first
-        cache_key = f"demographics:{creator_id}"
-        cached = await cache.get(cache_key)
-        if cached:
-            return cached
-        
-        # Query demographics
-        result = await self.session.execute(
-            select(CreatorAudienceDemographic)
-            .where(CreatorAudienceDemographic.creator_id == creator_id)
+    async def get_creator_demographics(
+        self, 
+        creator_id: uuid.UUID
+    ) -> List[CreatorAudienceDemographics]:
+        """Get all demographics for a creator"""
+        result = await self.db.execute(
+            select(CreatorAudienceDemographics)
+            .where(CreatorAudienceDemographics.creator_id == creator_id)
             .order_by(
-                CreatorAudienceDemographic.gender,
-                CreatorAudienceDemographic.age_group
+                CreatorAudienceDemographics.age_group,
+                CreatorAudienceDemographics.gender
             )
         )
-        demographics = result.scalars().all()
-        
-        # Cache for 5 minutes
-        await cache.set(cache_key, demographics, expire=300)
-        
-        return demographics
+        return result.scalars().all()
     
-    async def update_demographics_bulk(
+    async def validate_percentage_sum(
         self,
-        creator_id: UUID,
-        demographics_data: AudienceDemographicsBulkUpdate
-    ) -> List[CreatorAudienceDemographic]:
+        creator_id: uuid.UUID,
+        age_group: str,
+        gender: GenderType,
+        new_percentage: Decimal,
+        exclude_id: Optional[uuid.UUID] = None
+    ) -> Tuple[bool, Decimal]:
         """
-        Bulk update all demographics for a creator
-        Replaces existing data with new data
-        
-        Args:
-            creator_id: UUID of the creator
-            demographics_data: Bulk update data
-            
-        Returns:
-            List of updated demographic entries
-            
-        Raises:
-            ValidationException: If data validation fails
-            NotFoundException: If creator not found
+        Validate that adding new percentage won't exceed 100%
+        Returns: (is_valid, current_sum)
         """
-        # Verify creator exists
-        creator = await self._get_creator(creator_id)
-        if not creator:
-            raise NotFoundException(f"Creator {creator_id} not found")
-        
-        # Validate demographics
-        validation_result = self.validator.validate_bulk_demographics(
-            demographics_data.demographics
+        query = select(func.sum(CreatorAudienceDemographics.percentage)).where(
+            and_(
+                CreatorAudienceDemographics.creator_id == creator_id,
+                CreatorAudienceDemographics.age_group == age_group,
+                CreatorAudienceDemographics.gender == gender
+            )
         )
-        if not validation_result.is_valid:
-            raise ValidationException(validation_result.errors)
         
-        try:
-            # Delete existing demographics in transaction
-            await self.session.execute(
-                delete(CreatorAudienceDemographic)
-                .where(CreatorAudienceDemographic.creator_id == creator_id)
-            )
-            
-            # Create new demographics
-            new_demographics = []
-            for demo_data in demographics_data.demographics:
-                demographic = CreatorAudienceDemographic(
-                    creator_id=creator_id,
-                    age_group=demo_data.age_group,
-                    gender=demo_data.gender,
-                    percentage=Decimal(str(demo_data.percentage)),
-                    country=demo_data.country
-                )
-                self.session.add(demographic)
-                new_demographics.append(demographic)
-            
-            await self.session.commit()
-            
-            # Clear cache
-            await self._clear_demographics_cache(creator_id)
-            
-            logger.info(f"Updated {len(new_demographics)} demographics for creator {creator_id}")
-            return new_demographics
-            
-        except IntegrityError as e:
-            await self.session.rollback()
-            logger.error(f"Database integrity error: {str(e)}")
-            raise BusinessLogicException("Failed to update demographics due to data conflict")
-        except Exception as e:
-            await self.session.rollback()
-            logger.error(f"Error updating demographics: {str(e)}")
-            raise
+        if exclude_id:
+            query = query.where(CreatorAudienceDemographics.id != exclude_id)
+        
+        result = await self.db.execute(query)
+        current_sum = result.scalar() or Decimal('0')
+        
+        is_valid = (current_sum + new_percentage) <= Decimal('100')
+        return is_valid, current_sum
     
-    async def add_or_update_demographic(
+    async def get_top_demographics(
         self,
-        creator_id: UUID,
-        demographic_data: AudienceDemographicCreate
-    ) -> CreatorAudienceDemographic:
-        """
-        Add or update a single demographic entry
-        
-        Args:
-            creator_id: UUID of the creator
-            demographic_data: Demographic data to add/update
-            
-        Returns:
-            Created or updated demographic entry
-        """
-        # Verify creator exists
-        creator = await self._get_creator(creator_id)
-        if not creator:
-            raise NotFoundException(f"Creator {creator_id} not found")
-        
-        try:
-            # Check if entry exists
-            result = await self.session.execute(
-                select(CreatorAudienceDemographic)
-                .where(
-                    and_(
-                        CreatorAudienceDemographic.creator_id == creator_id,
-                        CreatorAudienceDemographic.age_group == demographic_data.age_group,
-                        CreatorAudienceDemographic.gender == demographic_data.gender,
-                        CreatorAudienceDemographic.country == (
-                            demographic_data.country if demographic_data.country else None
-                        )
-                    )
-                )
-            )
-            existing = result.scalar_one_or_none()
-            
-            if existing:
-                # Update existing
-                existing.percentage = Decimal(str(demographic_data.percentage))
-                existing.updated_at = datetime.utcnow()
-                demographic = existing
-            else:
-                # Create new
-                demographic = CreatorAudienceDemographic(
-                    creator_id=creator_id,
-                    age_group=demographic_data.age_group,
-                    gender=demographic_data.gender,
-                    percentage=Decimal(str(demographic_data.percentage)),
-                    country=demographic_data.country
-                )
-                self.session.add(demographic)
-            
-            await self.session.commit()
-            await self._clear_demographics_cache(creator_id)
-            
-            return demographic
-            
-        except Exception as e:
-            await self.session.rollback()
-            logger.error(f"Error adding/updating demographic: {str(e)}")
-            raise
+        creator_id: uuid.UUID,
+        limit: int = 5
+    ) -> List[CreatorAudienceDemographics]:
+        """Get top demographics by percentage"""
+        result = await self.db.execute(
+            select(CreatorAudienceDemographics)
+            .where(CreatorAudienceDemographics.creator_id == creator_id)
+            .order_by(CreatorAudienceDemographics.percentage.desc())
+            .limit(limit)
+        )
+        return result.scalars().all()
     
-    async def delete_demographic(
+    async def get_demographics_by_country(
         self,
-        creator_id: UUID,
-        demographic_id: UUID
-    ) -> bool:
-        """
-        Delete a specific demographic entry
-        
-        Args:
-            creator_id: UUID of the creator
-            demographic_id: UUID of the demographic entry
-            
-        Returns:
-            True if deleted, False if not found
-        """
-        result = await self.session.execute(
-            delete(CreatorAudienceDemographic)
+        creator_id: uuid.UUID,
+        country: str
+    ) -> List[CreatorAudienceDemographics]:
+        """Get demographics filtered by country"""
+        result = await self.db.execute(
+            select(CreatorAudienceDemographics)
             .where(
                 and_(
-                    CreatorAudienceDemographic.id == demographic_id,
-                    CreatorAudienceDemographic.creator_id == creator_id
+                    CreatorAudienceDemographics.creator_id == creator_id,
+                    CreatorAudienceDemographics.country == country
                 )
             )
         )
-        
-        if result.rowcount > 0:
-            await self.session.commit()
-            await self._clear_demographics_cache(creator_id)
-            return True
-        
-        return False
+        return result.scalars().all()
     
-    async def get_demographics_summary(self, creator_id: UUID) -> Dict[str, Any]:
-        """
-        Get summarized demographics data
+    async def replace_all_demographics(
+        self,
+        creator_id: uuid.UUID,
+        new_demographics: List[Dict]
+    ) -> List[CreatorAudienceDemographics]:
+        """Replace all demographics for a creator"""
+        # Delete existing
+        await self.db.execute(
+            delete(CreatorAudienceDemographics)
+            .where(CreatorAudienceDemographics.creator_id == creator_id)
+        )
         
-        Args:
-            creator_id: UUID of the creator
-            
-        Returns:
-            Dictionary with demographic summaries
-        """
-        demographics = await self.get_demographics(creator_id)
+        # Create new
+        created = []
+        for demo_data in new_demographics:
+            demo = CreatorAudienceDemographics(
+                creator_id=creator_id,
+                **demo_data
+            )
+            self.db.add(demo)
+            created.append(demo)
+        
+        await self.db.flush()
+        return created
+    
+    async def get_stale_demographics(
+        self,
+        days_old: int = 30
+    ) -> List[Dict]:
+        """Get creators with demographics older than specified days"""
+        cutoff_date = datetime.utcnow() - timedelta(days=days_old)
+        
+        result = await self.db.execute(
+            select(
+                CreatorAudienceDemographics.creator_id,
+                func.max(CreatorAudienceDemographics.updated_at).label('last_updated'),
+                func.count(CreatorAudienceDemographics.id).label('entry_count')
+            )
+            .group_by(CreatorAudienceDemographics.creator_id)
+            .having(func.max(CreatorAudienceDemographics.updated_at) < cutoff_date)
+        )
+        
+        return [
+            {
+                'creator_id': str(row.creator_id),
+                'last_updated': row.last_updated,
+                'entry_count': row.entry_count
+            }
+            for row in result
+        ]
+    
+    async def calculate_audience_overlap(
+        self,
+        creator_id1: uuid.UUID,
+        creator_id2: uuid.UUID
+    ) -> Dict[str, float]:
+        """Calculate audience overlap between two creators"""
+        # Get demographics for both creators
+        demographics1 = await self.get_creator_demographics(creator_id1)
+        demographics2 = await self.get_creator_demographics(creator_id2)
+        
+        # Create dictionaries for easy comparison
+        demo1_dict = {
+            (d.age_group, d.gender, d.country): d.percentage 
+            for d in demographics1
+        }
+        demo2_dict = {
+            (d.age_group, d.gender, d.country): d.percentage 
+            for d in demographics2
+        }
+        
+        # Calculate overlap
+        overlap = Decimal('0')
+        total_segments = set(demo1_dict.keys()) | set(demo2_dict.keys())
+        
+        for segment in total_segments:
+            pct1 = demo1_dict.get(segment, Decimal('0'))
+            pct2 = demo2_dict.get(segment, Decimal('0'))
+            overlap += min(pct1, pct2)
+        
+        return {
+            'overlap_percentage': float(overlap),
+            'unique_segments_creator1': len(set(demo1_dict.keys()) - set(demo2_dict.keys())),
+            'unique_segments_creator2': len(set(demo2_dict.keys()) - set(demo1_dict.keys())),
+            'shared_segments': len(set(demo1_dict.keys()) & set(demo2_dict.keys()))
+        }
+    
+    async def generate_demographics_insights(
+        self,
+        creator_id: uuid.UUID
+    ) -> DemographicsInsight:
+        """Generate insights about creator's demographics"""
+        demographics = await self.get_creator_demographics(creator_id)
         
         if not demographics:
-            return {
-                "has_demographics": False,
-                "gender_distribution": {},
-                "age_distribution": {},
-                "top_countries": [],
-                "primary_audience": None
-            }
-        
-        # Calculate distributions
-        gender_dist = {}
-        age_dist = {}
-        country_dist = {}
-        
-        for demo in demographics:
-            # Gender distribution
-            gender = demo.gender
-            if gender not in gender_dist:
-                gender_dist[gender] = Decimal(0)
-            gender_dist[gender] += demo.percentage
-            
-            # Age distribution
-            age = demo.age_group
-            if age not in age_dist:
-                age_dist[age] = Decimal(0)
-            age_dist[age] += demo.percentage
-            
-            # Country distribution
-            if demo.country:
-                if demo.country not in country_dist:
-                    country_dist[demo.country] = Decimal(0)
-                country_dist[demo.country] += demo.percentage
+            raise ValueError("No demographics data available")
         
         # Find primary audience
-        primary_demo = max(demographics, key=lambda d: d.percentage)
+        top_segment = max(demographics, key=lambda x: x.percentage)
         
-        # Sort countries by percentage
-        top_countries = sorted(
-            [(c, float(p)) for c, p in country_dist.items()],
-            key=lambda x: x[1],
-            reverse=True
-        )[:5]
+        # Calculate concentration
+        total_percentage = sum(d.percentage for d in demographics)
+        avg_percentage = total_percentage / len(demographics) if demographics else 0
+        variance = sum((d.percentage - avg_percentage) ** 2 for d in demographics) / len(demographics)
+        concentration = float(variance ** 0.5)  # Standard deviation as concentration metric
         
-        return {
-            "has_demographics": True,
-            "gender_distribution": {k: float(v) for k, v in gender_dist.items()},
-            "age_distribution": {k: float(v) for k, v in age_dist.items()},
-            "top_countries": top_countries,
-            "primary_audience": {
-                "age_group": primary_demo.age_group,
-                "gender": primary_demo.gender,
-                "percentage": float(primary_demo.percentage)
+        # Get top segments
+        top_segments = sorted(demographics, key=lambda x: x.percentage, reverse=True)[:5]
+        top_segments_data = [
+            {
+                'age_group': seg.age_group,
+                'gender': seg.gender.value,
+                'country': seg.country,
+                'percentage': float(seg.percentage)
             }
-        }
-    
-    async def search_creators_by_demographics(
-        self,
-        filters: Dict[str, Any],
-        limit: int = 20,
-        offset: int = 0
-    ) -> Dict[str, Any]:
-        """
-        Search creators by demographic criteria
-        
-        Args:
-            filters: Search filters (age_groups, genders, countries, min_percentage)
-            limit: Number of results
-            offset: Pagination offset
-            
-        Returns:
-            Dictionary with creators and pagination info
-        """
-        query = select(User).where(User.role == 'creator')
-        
-        # Apply demographic filters
-        if any(filters.get(k) for k in ['age_groups', 'genders', 'countries']):
-            subquery = select(CreatorAudienceDemographic.creator_id).distinct()
-            
-            if filters.get('age_groups'):
-                subquery = subquery.where(
-                    CreatorAudienceDemographic.age_group.in_(filters['age_groups'])
-                )
-            
-            if filters.get('genders'):
-                subquery = subquery.where(
-                    CreatorAudienceDemographic.gender.in_(filters['genders'])
-                )
-            
-            if filters.get('countries'):
-                subquery = subquery.where(
-                    CreatorAudienceDemographic.country.in_(filters['countries'])
-                )
-            
-            if filters.get('min_percentage'):
-                subquery = subquery.where(
-                    CreatorAudienceDemographic.percentage >= filters['min_percentage']
-                )
-            
-            query = query.where(User.id.in_(subquery))
-        
-        # Count total
-        count_result = await self.session.execute(
-            select(func.count()).select_from(query.subquery())
-        )
-        total = count_result.scalar() or 0
-        
-        # Apply pagination
-        query = query.offset(offset).limit(limit)
-        
-        # Execute query
-        result = await self.session.execute(query)
-        creators = result.scalars().all()
-        
-        return {
-            "creators": creators,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "pages": (total + limit - 1) // limit
-        }
-    
-    # Helper methods
-    async def _get_creator(self, creator_id: UUID) -> Optional[User]:
-        """Get creator by ID"""
-        result = await self.session.execute(
-            select(User).where(
-                and_(
-                    User.id == creator_id,
-                    User.role == 'creator'
-                )
-            )
-        )
-        return result.scalar_one_or_none()
-    
-    async def _clear_demographics_cache(self, creator_id: UUID) -> None:
-        """Clear demographics cache for a creator"""
-        cache_keys = [
-            f"demographics:{creator_id}",
-            f"demographics_summary:{creator_id}",
-            f"creator_profile:{creator_id}"
+            for seg in top_segments
         ]
-        for key in cache_keys:
-            await cache.delete(key)
+        
+        # Generate recommendations
+        recommendations = []
+        
+        # Check for underrepresented age groups
+        age_groups = {d.age_group for d in demographics}
+        all_age_groups = {'13-17', '18-24', '25-34', '35-44', '45-54', '55+'}
+        missing_age_groups = all_age_groups - age_groups
+        if missing_age_groups:
+            recommendations.append(f"Consider targeting age groups: {', '.join(missing_age_groups)}")
+        
+        # Check for gender balance
+        gender_dist = {}
+        for d in demographics:
+            gender_dist[d.gender.value] = gender_dist.get(d.gender.value, 0) + float(d.percentage)
+        
+        if len(gender_dist) < 2:
+            recommendations.append("Consider diversifying gender audience")
+        
+        # Check geographical diversity
+        countries = {d.country for d in demographics if d.country}
+        if len(countries) < 3:
+            recommendations.append("Consider expanding to more geographical markets")
+        
+        return DemographicsInsight(
+            creator_id=creator_id,
+            primary_audience={
+                'age_group': top_segment.age_group,
+                'gender': top_segment.gender.value,
+                'country': top_segment.country or 'Global'
+            },
+            audience_concentration=concentration,
+            top_segments=top_segments_data,
+            growth_segments=[],  # This would require historical data
+            recommendations=recommendations
+        )

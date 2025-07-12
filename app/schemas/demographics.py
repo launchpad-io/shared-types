@@ -1,292 +1,205 @@
+# app/schemas/demographics.py
 """
-Demographics Schemas
-Pydantic models for demographics-specific endpoints
+Pydantic schemas for demographics endpoints
+Compatible with Pydantic v2
 """
-
-from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field, field_validator, ConfigDict
+from typing import Optional, List, Dict, Any
+from decimal import Decimal
 from datetime import datetime
-from uuid import UUID
+import uuid
 from enum import Enum
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+
+class AgeGroup(str, Enum):
+    """Age group enum"""
+    AGE_13_17 = "13-17"
+    AGE_18_24 = "18-24"
+    AGE_25_34 = "25-34"
+    AGE_35_44 = "35-44"
+    AGE_45_54 = "45-54"
+    AGE_55_PLUS = "55+"
 
 
-class DemographicsTemplateFormat(str, Enum):
-    """Template format options"""
-    csv = "csv"
-    xlsx = "xlsx"
+class Gender(str, Enum):
+    """Gender enum"""
+    MALE = "male"
+    FEMALE = "female"
+    OTHER = "other"
+    NOT_SPECIFIED = "not_specified"
 
 
-class DemographicsImportResponse(BaseModel):
-    """Response for demographics import"""
-    success: bool
-    imported_count: int = Field(..., ge=0)
-    error_count: int = Field(..., ge=0)
-    errors: List[Dict[str, Any]] = Field(default_factory=list)
-    message: str
-    
+class DemographicsBase(BaseModel):
+    """Base demographics schema"""
+    age_group: AgeGroup
+    gender: Gender  # Added gender field since your router expects it
+    percentage: Decimal = Field(..., ge=0, le=100)
+    country: Optional[str] = Field(None, max_length=100)
+
+    @field_validator('percentage', mode='before')
+    @classmethod
+    def round_percentage(cls, v):
+        if v is not None:
+            return round(Decimal(str(v)), 2)
+        return v
+
+    @field_validator('country')
+    @classmethod
+    def clean_country(cls, v):
+        if v is not None and v.strip() == '':
+            return None
+        return v
+
     model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "success": True,
-                "imported_count": 10,
-                "error_count": 2,
-                "errors": [
-                    {
-                        "row": 5,
-                        "errors": [{"msg": "Invalid age group: 12-16"}]
-                    }
-                ],
-                "message": "Successfully imported 10 demographics"
-            }
+        json_encoders={
+            Decimal: lambda v: float(v)
         }
     )
 
 
-class GenderDistributionData(BaseModel):
-    """Gender distribution for charts"""
-    name: str
-    value: float = Field(..., ge=0, le=100)
-    color: str
+class DemographicsCreate(DemographicsBase):
+    """Schema for creating demographics - no creator_id needed"""
+    pass
 
 
-class AgeDistributionData(BaseModel):
-    """Age distribution for charts"""
-    age_group: str
-    percentage: float = Field(..., ge=0, le=100)
-    color: str
+class DemographicsCreateWithCreator(DemographicsBase):
+    """Schema for creating demographics with explicit creator_id"""
+    creator_id: uuid.UUID
 
 
-class LocationDistributionData(BaseModel):
-    """Location distribution data"""
-    country: str
-    country_name: str
-    percentage: float = Field(..., ge=0, le=100)
+class DemographicsUpdate(BaseModel):
+    """Schema for updating demographics"""
+    age_group: Optional[AgeGroup] = None
+    gender: Optional[Gender] = None
+    percentage: Optional[Decimal] = Field(None, ge=0, le=100)
+    country: Optional[str] = Field(None, max_length=100)
 
+    @field_validator('percentage', mode='before')
+    @classmethod
+    def round_percentage(cls, v):
+        if v is not None:
+            return round(Decimal(str(v)), 2)
+        return v
 
-class DemographicBreakdown(BaseModel):
-    """Detailed demographic segment"""
-    segment: str
-    country: str
-    percentage: float = Field(..., ge=0, le=100)
-    gender: str
-    age_group: str
-
-
-class DemographicsVisualizationResponse(BaseModel):
-    """Complete visualization data response"""
-    gender_distribution: Dict[str, Any] = Field(
-        ...,
-        description="Gender distribution with chart data"
-    )
-    age_distribution: Dict[str, Any] = Field(
-        ...,
-        description="Age distribution with chart data"
-    )
-    location_distribution: Dict[str, Any] = Field(
-        ...,
-        description="Location distribution with top countries"
-    )
-    detailed_breakdown: List[DemographicBreakdown] = Field(
-        default_factory=list,
-        description="Top demographic segments"
-    )
-    has_demographics: bool
-    last_updated: Optional[datetime] = None
-    
     model_config = ConfigDict(
-        from_attributes=True,
         json_encoders={
+            Decimal: lambda v: float(v)
+        }
+    )
+
+
+class DemographicsResponse(DemographicsBase):
+    """Response schema for demographics"""
+    id: uuid.UUID
+    creator_id: uuid.UUID
+    updated_at: datetime
+
+    model_config = ConfigDict(
+        from_attributes=True,  # This replaces orm_mode in Pydantic v2
+        json_encoders={
+            Decimal: lambda v: float(v),
+            datetime: lambda v: v.isoformat()
+        }
+    )
+
+
+class DemographicsEntry(DemographicsBase):
+    """Schema for bulk operations without creator_id"""
+    pass
+
+
+class DemographicsBulkCreate(BaseModel):
+    """Schema for bulk creating demographics"""
+    demographics: List[DemographicsEntry]
+    
+    @field_validator('demographics')
+    @classmethod
+    def validate_demographics_list(cls, v):
+        if not v:
+            raise ValueError('Demographics list cannot be empty')
+        if len(v) > 100:
+            raise ValueError('Cannot create more than 100 demographics entries at once')
+        
+        # Validate no duplicate entries
+        seen = set()
+        for demo in v:
+            key = (demo.age_group, demo.gender, demo.country)
+            if key in seen:
+                raise ValueError(f'Duplicate entry found for {demo.age_group}/{demo.gender}/{demo.country or "ALL"}')
+            seen.add(key)
+        
+        # Validate total percentage per age_group/gender combination
+        totals = {}
+        for demo in v:
+            key = (demo.age_group, demo.gender)
+            totals[key] = totals.get(key, Decimal('0')) + demo.percentage
+        
+        for key, total in totals.items():
+            if total > Decimal('100'):
+                age_group, gender = key
+                raise ValueError(f'Total percentage for {age_group}/{gender} exceeds 100% (total: {total}%)')
+        
+        return v
+
+    model_config = ConfigDict(
+        json_encoders={
+            Decimal: lambda v: float(v)
+        }
+    )
+
+
+class DemographicsSummary(BaseModel):
+    """Summary statistics for creator demographics"""
+    creator_id: uuid.UUID
+    total_entries: int
+    total_percentage: Decimal
+    age_distribution: Dict[str, Decimal]
+    gender_distribution: Dict[str, Decimal]
+    country_distribution: Dict[str, Decimal]
+    last_updated: Optional[datetime]
+
+    model_config = ConfigDict(
+        json_encoders={
+            Decimal: lambda v: float(v),
             datetime: lambda v: v.isoformat() if v else None
         }
     )
 
 
-class DemographicsSearchFilters(BaseModel):
-    """Filters for searching creators by demographics"""
-    age_groups: Optional[List[str]] = Field(None, description="Filter by age groups")
-    genders: Optional[List[str]] = Field(None, description="Filter by genders")
-    countries: Optional[List[str]] = Field(None, description="Filter by countries")
-    min_percentage: Optional[float] = Field(
-        None, 
-        ge=0, 
-        le=100,
-        description="Minimum percentage for any demographic"
-    )
-    
-    @field_validator('age_groups', 'genders')
+class DemographicsComparisonResult(BaseModel):
+    """Result of comparing demographics between creators"""
+    creator_id_1: uuid.UUID
+    creator_id_2: uuid.UUID
+    overlap_percentage: float
+    unique_segments_creator1: int
+    unique_segments_creator2: int
+    shared_segments: int
+    detailed_overlap: Dict[str, Dict[str, float]]
+
+
+class DemographicsInsight(BaseModel):
+    """Analytics insights for demographics"""
+    creator_id: uuid.UUID
+    primary_audience: Dict[str, str]
+    audience_concentration: float
+    top_segments: List[Dict[str, Any]]
+    growth_segments: List[Dict[str, Any]]
+    recommendations: List[str]
+
+
+class DemographicsFilter(BaseModel):
+    """Filter parameters for searching demographics"""
+    age_groups: Optional[List[AgeGroup]] = None
+    genders: Optional[List[Gender]] = None
+    countries: Optional[List[str]] = None
+    min_percentage: Optional[float] = Field(None, ge=0, le=100)
+    max_percentage: Optional[float] = Field(None, ge=0, le=100)
+    creator_ids: Optional[List[uuid.UUID]] = None
+
+    @field_validator('max_percentage')
     @classmethod
-    def validate_list_not_empty(cls, v: Optional[List[str]]) -> Optional[List[str]]:
-        if v is not None and len(v) == 0:
-            return None
+    def validate_percentage_range(cls, v, info):
+        if v is not None and info.data.get('min_percentage') is not None:
+            if v < info.data['min_percentage']:
+                raise ValueError('max_percentage must be greater than min_percentage')
         return v
-
-
-class DemographicsAnalyticsResponse(BaseModel):
-    """Aggregated analytics across creators"""
-    total_creators: int = Field(..., ge=0)
-    gender_distribution: Dict[str, float] = Field(
-        ...,
-        description="Average gender distribution across network"
-    )
-    age_distribution: Dict[str, float] = Field(
-        ...,
-        description="Average age distribution across network"
-    )
-    top_countries: List[tuple[str, float]] = Field(
-        default_factory=list,
-        description="Most common countries across network"
-    )
-    average_metrics: Dict[str, float] = Field(
-        ...,
-        description="Average demographic metrics"
-    )
-    
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "total_creators": 150,
-                "gender_distribution": {
-                    "female": 65.5,
-                    "male": 34.5
-                },
-                "age_distribution": {
-                    "18-24": 45.0,
-                    "25-34": 35.0,
-                    "35-44": 20.0
-                },
-                "top_countries": [
-                    ["US", 78.5],
-                    ["CA", 12.3],
-                    ["GB", 9.2]
-                ],
-                "average_metrics": {
-                    "avg_female_percentage": 65.5,
-                    "avg_youth_percentage": 45.0,
-                    "avg_countries_per_creator": 1.8
-                }
-            }
-        }
-    )
-
-
-class DemographicsComparisonRequest(BaseModel):
-    """Request for comparing multiple creators"""
-    creator_ids: List[UUID] = Field(
-        ...,
-        min_length=2,
-        max_length=5,
-        description="List of creator IDs to compare"
-    )
-
-
-class CreatorComparisonData(BaseModel):
-    """Comparison data for a single creator"""
-    creator_id: str
-    data: Dict[str, float]
-
-
-class DemographicsComparisonResponse(BaseModel):
-    """Response for demographics comparison"""
-    creators: List[Any] = Field(default_factory=list)
-    gender_comparison: List[CreatorComparisonData]
-    age_comparison: List[CreatorComparisonData]
-    location_overlap: List[Any] = Field(default_factory=list)
-    
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "creators": [],
-                "gender_comparison": [
-                    {
-                        "creator_id": "123e4567-e89b-12d3-a456-426614174000",
-                        "data": {"Female": 67.5, "Male": 32.5}
-                    }
-                ],
-                "age_comparison": [
-                    {
-                        "creator_id": "123e4567-e89b-12d3-a456-426614174000",
-                        "data": {"18-24": 45.0, "25-34": 35.0}
-                    }
-                ],
-                "location_overlap": []
-            }
-        }
-    )
-
-
-class DemographicsSummaryResponse(BaseModel):
-    """Quick summary of creator demographics"""
-    has_demographics: bool
-    gender_distribution: Dict[str, float] = Field(
-        default_factory=dict,
-        description="Gender percentages"
-    )
-    age_distribution: Dict[str, float] = Field(
-        default_factory=dict,
-        description="Age group percentages"
-    )
-    top_countries: List[tuple[str, float]] = Field(
-        default_factory=list,
-        description="Top countries with percentages"
-    )
-    primary_audience: Optional[Dict[str, Any]] = Field(
-        None,
-        description="Primary demographic segment"
-    )
-    
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "has_demographics": True,
-                "gender_distribution": {
-                    "female": 67.5,
-                    "male": 32.5
-                },
-                "age_distribution": {
-                    "18-24": 45.0,
-                    "25-34": 35.0,
-                    "35-44": 20.0
-                },
-                "top_countries": [
-                    ["US", 78.5],
-                    ["CA", 12.3]
-                ],
-                "primary_audience": {
-                    "age_group": "18-24",
-                    "gender": "female",
-                    "percentage": 30.5
-                }
-            }
-        }
-    )
-
-
-class DemographicsExportRequest(BaseModel):
-    """Request for exporting demographics"""
-    creator_ids: Optional[List[UUID]] = Field(
-        None,
-        description="Specific creators to export (admin only)"
-    )
-    format: DemographicsTemplateFormat = Field(
-        DemographicsTemplateFormat.csv,
-        description="Export format"
-    )
-    include_summary: bool = Field(
-        False,
-        description="Include summary statistics"
-    )
-
-
-class DemographicsTrendData(BaseModel):
-    """Demographics trend over time"""
-    date: datetime
-    gender_distribution: Dict[str, float]
-    age_distribution: Dict[str, float]
-    total_reach: int = Field(..., ge=0)
-    
-    model_config = ConfigDict(
-        json_encoders={
-            datetime: lambda v: v.isoformat()
-        }
-    )

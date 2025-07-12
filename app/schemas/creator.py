@@ -224,6 +224,11 @@ class CreatorAnalyticsSummary(BaseModel):
         }
     )
 
+class GMVUpdate(BaseModel):
+    amount: float = Field(..., gt=0, le=10000000)
+    period: str = Field(..., pattern="^(daily|weekly|monthly|total)$")
+    date: Optional[str] = None   # Or use datetime if you prefer
+    description: Optional[str] = Field(None, max_length=200)
 
 class CreatorProfileResponse(BaseModel):
     """Comprehensive creator profile response"""

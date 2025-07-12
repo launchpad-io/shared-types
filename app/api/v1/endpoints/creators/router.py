@@ -1,651 +1,583 @@
-"""
-Creator-specific API endpoints for TikTok Shop Creator CRM
-Handles creator profiles, demographics, and integrates with badge system.
-"""
-from typing import List, Optional, Dict, Any
-from uuid import UUID
-from datetime import datetime, timedelta
-from decimal import Decimal
-
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
-from fastapi.responses import JSONResponse
+# app/api/v1/endpoints/creators/router.py
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
-from pydantic import EmailStr
+from sqlalchemy.future import select
+from typing import Optional, List
+from pydantic import BaseModel, Field, validator
+from datetime import datetime, date
+from decimal import Decimal
+from enum import Enum
+import uuid
 
 from app.db.session import get_db
-from app.core.dependencies import get_current_active_user, require_creator_role
+from app.core.auth import get_current_active_user
 from app.models.user import User, UserRole
-from app.schemas.creator import (
-    AudienceDemographicCreate,
-    AudienceDemographicResponse,
-    AudienceDemographicsBulkUpdate,
-    CreatorPerformanceMetrics,
-    CreatorRankingResponse,
-    CreatorLeaderboardResponse,
-    CreatorAnalyticsSummary,
-    CreatorProfileResponse,
-    DemographicsVisualizationData,
-    DemographicsAnalytics,
-    CreatorDemographicsProfile
-)
-from app.schemas.badge import (
-    BadgeResponse,
-    BadgeProgressResponse,
-    BadgeHistoryResponse,
-    BadgeShowcaseResponse
-)
-from app.services.creator_service.creator_service import CreatorService
-from app.services.badge_service import BadgeService, ProgressTracker
-from app.services.creator_service.analytics_service import CreatorAnalyticsService
-from app.services.demographics import DemographicsVisualizationService
-from app.core.cache import cache
+from app.models.gmv_history import GMVHistory
+from app.models.analytics import Analytics
 from app.utils.logging import get_logger
+
+from app.schemas.creator import CreatorProfileResponse
+from app.schemas.user import UserProfileUpdate
+from app.schemas.creator import CreatorPerformanceMetrics
+from app.schemas.creator import GMVUpdate
+from app.schemas.creator import AudienceDemographicsBulkUpdate as AudienceDemographicsUpdate
+from app.schemas.badge import BadgeResponse
+
+from app.models.demographics import CreatorAudienceDemographics
+from app.schemas.demographics import (
+    DemographicsResponse, 
+    DemographicsCreate, 
+    DemographicsUpdate,
+    DemographicsBulkCreate,
+    DemographicsSummary
+)
+from sqlalchemy import text, and_
+from sqlalchemy import func
+
+
+
 
 logger = get_logger(__name__)
 
-# Create router WITHOUT prefix (prefix will be added in api.py)
-router = APIRouter(
-    responses={
-        401: {"description": "Not authenticated"},
-        403: {"description": "Not a creator"},
-        404: {"description": "Creator not found"},
-        422: {"description": "Validation error"}
-    }
-)
+router = APIRouter()
 
-# Profile endpoints
-@router.get("/profile", response_model=CreatorProfileResponse, 
-           summary="Get current creator's profile")
+# --- Enums and Schemas (keep as in your current file) ---
+# (No changes to Enums, ProfileResponse, Update, etc. for brevity)
+
+# [ENUMS AND Pydantic SCHEMAS ... as in your file, not shown for brevity]
+
+# ------------------ Endpoints ----------------------
+
+# Get creator profile
+@router.get("/profile", response_model=CreatorProfileResponse)
 async def get_creator_profile(
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> CreatorProfileResponse:
-    """
-    Get comprehensive profile for the current creator including badges.
-    
-    Returns:
-        Complete creator profile with performance metrics and badges
-    """
-    try:
-        creator_service = CreatorService(db)
-        badge_service = BadgeService(db)
-        
-        # Get basic profile
-        creator = await creator_service.get_creator_by_id(current_user.id)
-        if not creator:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Creator profile not found"
-            )
-        
-        # Get badges
-        badges = await badge_service.get_creator_badges(current_user.id)
-        
-        # Get badge progress
-        progress_tracker = ProgressTracker(db)
-        badge_progress = await progress_tracker.get_overall_progress(current_user.id)
-        
-        # Construct response
-        return CreatorProfileResponse(
-            id=creator.id,
-            username=creator.username,
-            email=creator.email,
-            first_name=creator.first_name,
-            last_name=creator.last_name,
-            profile_image_url=creator.profile_image_url,
-            bio=creator.bio,
-            content_niche=creator.content_niche,
-            follower_count=creator.follower_count,
-            average_views=creator.average_views,
-            engagement_rate=float(creator.engagement_rate) if creator.engagement_rate else None,
-            current_gmv=float(creator.current_gmv or 0),
-            tiktok_handle=creator.tiktok_handle,
-            instagram_handle=creator.instagram_handle,
-            discord_handle=creator.discord_handle,
-            badges=badges,
-            badge_progress=badge_progress,
-            total_campaigns=0,  # TODO: Implement when campaigns are ready
-            completion_rate=0.0,  # TODO: Implement when campaigns are ready
-            avg_rating=None,  # TODO: Implement when ratings are ready
-            created_at=creator.created_at,
-            last_active=creator.last_login,
-            is_verified=creator.email_verified
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching creator profile: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch creator profile"
-        )
-
-# Badge endpoints
-@router.get("/badges", response_model=List[BadgeResponse], 
-           summary="Get creator's badges")
-async def get_creator_badges(
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> List[BadgeResponse]:
-    """
-    Get all badges (earned and unearned) for the current creator.
-    
-    Returns:
-        List of all badges with status and progress
-    """
-    try:
-        badge_service = BadgeService(db)
-        return await badge_service.get_creator_badges(current_user.id)
-        
-    except Exception as e:
-        logger.error(f"Error fetching badges: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch badges"
-        )
-
-@router.get("/badges/progress", response_model=BadgeProgressResponse, 
-           summary="Get badge progress")
-@cache(expire=300)  # Cache for 5 minutes
-async def get_badge_progress(
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> BadgeProgressResponse:
-    """
-    Get overall badge progress for the current creator.
-    
-    Returns:
-        Progress information including next badge details
-    """
-    try:
-        progress_tracker = ProgressTracker(db)
-        return await progress_tracker.get_overall_progress(current_user.id)
-        
-    except Exception as e:
-        logger.error(f"Error fetching badge progress: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch badge progress"
-        )
-
-@router.get("/badges/history", response_model=List[BadgeHistoryResponse], 
-           summary="Get badge history")
-async def get_badge_history(
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> List[BadgeHistoryResponse]:
-    """
-    Get badge achievement history for the current creator.
-    
-    Returns:
-        List of badge achievements with dates
-    """
-    try:
-        badge_service = BadgeService(db)
-        return await badge_service.get_badge_history(current_user.id)
-        
-    except Exception as e:
-        logger.error(f"Error fetching badge history: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch badge history"
-        )
-
-@router.get("/badges/showcase", response_model=BadgeShowcaseResponse, 
-           summary="Get badge showcase")
-async def get_badge_showcase(
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> BadgeShowcaseResponse:
-    """
-    Get badge showcase data for profile display.
-    
-    Returns:
-        Featured badges and achievement summary
-    """
-    try:
-        badge_service = BadgeService(db)
-        progress_tracker = ProgressTracker(db)
-        
-        # Get all badges
-        badges = await badge_service.get_creator_badges(current_user.id)
-        earned_badges = [b for b in badges if b.status == "earned"]
-        
-        # Get recent achievement
-        history = await badge_service.get_badge_history(current_user.id)
-        recent = history[0] if history else None
-        
-        # Get highest tier
-        highest_tier = None
-        if earned_badges:
-            earned_badges.sort(key=lambda x: x.gmv_requirement, reverse=True)
-            highest_tier = earned_badges[0].tier
-        
-        return BadgeShowcaseResponse(
-            featured_badges=earned_badges[:3],  # Top 3 badges
-            total_earned=len(earned_badges),
-            highest_tier=highest_tier,
-            recent_achievement=recent
-        )
-        
-    except Exception as e:
-        logger.error(f"Error fetching badge showcase: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch badge showcase"
-        )
-
-# Audience Demographics endpoints
-@router.get("/demographics", response_model=List[AudienceDemographicResponse],
-           summary="Get audience demographics")
-async def get_audience_demographics(
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> List[AudienceDemographicResponse]:
-    """
-    Get audience demographics for the current creator.
-    
-    Returns:
-        List of demographic breakdowns
-    """
-    try:
-        creator_service = CreatorService(db)
-        return await creator_service.get_audience_demographics(current_user.id)
-        
-    except Exception as e:
-        logger.error(f"Error fetching demographics: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch audience demographics"
-        )
-
-@router.put("/demographics/bulk", response_model=List[AudienceDemographicResponse],
-           summary="Bulk update demographics")
-async def bulk_update_demographics(
-    demographics: AudienceDemographicsBulkUpdate,
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> List[AudienceDemographicResponse]:
-    """
-    Bulk update audience demographics.
-    
-    Args:
-        demographics: List of demographic entries (must sum to ~100%)
-        
-    Returns:
-        Updated demographic list
-    """
-    try:
-        creator_service = CreatorService(db)
-        return await creator_service.update_audience_demographics(
-            current_user.id,
-            demographics.demographics
-        )
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-    except Exception as e:
-        logger.error(f"Error updating demographics: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update demographics"
-        )
-
-# Enhanced demographics endpoints
-@router.get("/demographics/visualization", 
-           response_model=DemographicsVisualizationData,
-           summary="Get demographics visualization data")
-@cache(expire=300)
-async def get_demographics_visualization(
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> DemographicsVisualizationData:
-    """
-    Get demographics data formatted for visualization charts.
-    
-    Returns:
-        Data formatted for gender, age, and location charts
-    """
-    try:
-        creator_service = CreatorService(db)
-        viz_data = await creator_service.get_demographics_visualization_data(current_user.id)
-        return viz_data
-        
-    except Exception as e:
-        logger.error(f"Error getting visualization data: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get visualization data"
-        )
-
-@router.get("/demographics/analytics",
-           response_model=DemographicsAnalytics,
-           summary="Get demographics analytics")
-async def get_demographics_analytics(
-    period_days: int = Query(30, ge=1, le=365),
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> DemographicsAnalytics:
-    """
-    Get analytics for audience demographics.
-    
-    Args:
-        period_days: Period for analytics (default 30 days)
-        
-    Returns:
-        Analytics including engagement by demographic
-    """
-    try:
-        analytics_service = CreatorAnalyticsService(db)
-        analytics = await analytics_service.get_demographics_analytics(
-            current_user.id,
-            period_days
-        )
-        return analytics
-        
-    except Exception as e:
-        logger.error(f"Error getting demographics analytics: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get demographics analytics"
-        )
-
-@router.get("/demographics/profile",
-           response_model=CreatorDemographicsProfile,
-           summary="Get complete demographics profile")
-async def get_demographics_profile(
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> CreatorDemographicsProfile:
-    """
-    Get complete demographics profile including visualization and analytics.
-    
-    Returns:
-        Comprehensive demographics profile
-    """
-    try:
-        creator_service = CreatorService(db)
-        analytics_service = CreatorAnalyticsService(db)
-        
-        # Get all demographics data
-        demographics = await creator_service.get_audience_demographics(current_user.id)
-        viz_data = await creator_service.get_demographics_visualization_data(current_user.id)
-        analytics = await analytics_service.get_demographics_analytics(current_user.id, 30)
-        
-        # Calculate completeness
-        completeness = await creator_service.calculate_demographics_completeness(current_user.id)
-        
-        return CreatorDemographicsProfile(
-            creator_id=current_user.id,
-            demographics=demographics,
-            visualization_data=viz_data,
-            analytics=analytics,
-            last_updated=datetime.utcnow(),
-            completeness_score=completeness
-        )
-        
-    except Exception as e:
-        logger.error(f"Error getting demographics profile: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get demographics profile"
-        )
-
-# Performance metrics endpoints
-@router.get("/performance", response_model=CreatorPerformanceMetrics,
-           summary="Get performance metrics")
-@cache(expire=600)  # Cache for 10 minutes
-async def get_performance_metrics(
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> CreatorPerformanceMetrics:
-    """
-    Get comprehensive performance metrics for the current creator.
-    
-    Returns:
-        Performance metrics including GMV, campaigns, and badges
-    """
-    try:
-        analytics_service = CreatorAnalyticsService(db)
-        badge_service = BadgeService(db)
-        progress_tracker = ProgressTracker(db)
-        
-        # Get performance metrics
-        metrics = await analytics_service.get_performance_metrics(current_user.id)
-        
-        # Get badge info
-        badges = await badge_service.get_creator_badges(current_user.id)
-        earned_badges = [b for b in badges if b.status == "earned"]
-        
-        # Get highest badge
-        highest_badge = None
-        if earned_badges:
-            earned_badges.sort(key=lambda x: x.gmv_requirement, reverse=True)
-            highest_badge = earned_badges[0].name
-        
-        # Get next badge progress
-        progress = await progress_tracker.get_overall_progress(current_user.id)
-        
-        # Build response
-        return CreatorPerformanceMetrics(
-            creator_id=current_user.id,
-            total_gmv=float(metrics['total_gmv']),
-            average_order_value=float(metrics['average_order_value']),
-            conversion_rate=metrics['conversion_rate'],
-            total_orders=metrics['total_orders'],
-            total_campaigns=metrics['total_campaigns'],
-            active_campaigns=metrics['active_campaigns'],
-            completion_rate=0.0,  # TODO: Calculate from campaigns
-            avg_engagement_rate=metrics['engagement_rate'],
-            badges_earned=len(earned_badges),
-            highest_badge=highest_badge,
-            next_badge_progress=progress.progress_percentage,
-            gmv_last_30_days=0.0,  # TODO: Calculate from orders
-            gmv_growth_rate=0.0  # TODO: Calculate trend
-        )
-        
-    except Exception as e:
-        logger.error(f"Error fetching performance metrics: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch performance metrics"
-        )
-
-# Analytics endpoints
-@router.get("/analytics/summary", response_model=CreatorAnalyticsSummary,
-           summary="Get analytics summary")
-async def get_analytics_summary(
-    period_days: int = Query(30, ge=1, le=365, description="Period in days"),
-    current_user: User = Depends(require_creator_role),
-    db: AsyncSession = Depends(get_db)
-) -> CreatorAnalyticsSummary:
-    """
-    Get analytics summary for specified period.
-    
-    Args:
-        period_days: Number of days to analyze (1-365)
-        
-    Returns:
-        Comprehensive analytics summary
-    """
-    try:
-        analytics_service = CreatorAnalyticsService(db)
-        
-        end_date = datetime.utcnow()
-        start_date = end_date - timedelta(days=period_days)
-        
-        return await analytics_service.get_analytics_summary(
-            current_user.id,
-            start_date,
-            end_date
-        )
-        
-    except Exception as e:
-        logger.error(f"Error fetching analytics: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch analytics"
-        )
-
-# Leaderboard endpoints
-@router.get("/leaderboard", response_model=CreatorLeaderboardResponse,
-           summary="Get creator leaderboard")
-@cache(expire=1800)  # Cache for 30 minutes
-async def get_creator_leaderboard(
-    period: str = Query("all-time", regex="^(weekly|monthly|all-time)$"),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    db: AsyncSession = Depends(get_db)
-) -> CreatorLeaderboardResponse:
-    """
-    Get creator leaderboard based on GMV and badges.
-    
-    Args:
-        period: Leaderboard period (weekly, monthly, all-time)
-        limit: Number of creators to return
-        offset: Pagination offset
-        
-    Returns:
-        Leaderboard with creator rankings
-    """
-    try:
-        analytics_service = CreatorAnalyticsService(db)
-        
-        leaderboard_data = await analytics_service.get_creator_leaderboard(
-            period=period,
-            limit=limit,
-            offset=offset
-        )
-        
-        return CreatorLeaderboardResponse(
-            period=period,
-            updated_at=datetime.utcnow(),
-            total_creators=leaderboard_data["total"],
-            leaderboard=leaderboard_data["creators"]
-        )
-        
-    except Exception as e:
-        logger.error(f"Error fetching leaderboard: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch leaderboard"
-        )
-
-# Search creators
-@router.get("/search", response_model=List[CreatorProfileResponse],
-           summary="Search creators")
-async def search_creators(
-    content_niche: Optional[str] = Query(None, description="Filter by niche"),
-    min_followers: Optional[int] = Query(None, ge=0, description="Minimum followers"),
-    min_engagement_rate: Optional[float] = Query(None, ge=0, le=100),
-    has_badge: Optional[str] = Query(None, description="Filter by badge type"),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
-) -> List[CreatorProfileResponse]:
-    """
-    Search creators with filters (for agencies and brands).
-    
-    Args:
-        content_niche: Filter by content niche
-        min_followers: Minimum follower count
-        min_engagement_rate: Minimum engagement rate
-        has_badge: Filter by specific badge type
-        limit: Number of results
-        offset: Pagination offset
-        
-    Returns:
-        List of creator profiles matching criteria
-    """
+):
+    if current_user.role != UserRole.CREATOR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only for creators")
+
+    content_categories = getattr(current_user, 'content_categories', [])
+    preferred_brands = getattr(current_user, 'preferred_brands', [])
+
+    return CreatorProfileResponse(
+        id=str(current_user.id),
+        username=current_user.username,
+        email=current_user.email,
+        first_name=current_user.first_name,
+        last_name=current_user.last_name,
+        bio=current_user.bio,
+        content_niche=current_user.content_niche,
+        content_categories=content_categories,
+        follower_count=current_user.follower_count or 0,
+        average_views=current_user.average_views or 0,
+        engagement_rate=float(current_user.engagement_rate or 0),
+        current_gmv=float(current_user.current_gmv or 0),
+        total_gmv=float(getattr(current_user, 'total_gmv', 0) or 0),
+        tiktok_handle=current_user.tiktok_handle,
+        instagram_handle=current_user.instagram_handle,
+        discord_handle=current_user.discord_handle,
+        youtube_handle=getattr(current_user, 'youtube_handle', None),
+        linkedin_handle=getattr(current_user, 'linkedin_handle', None),
+        profile_image_url=current_user.profile_image_url,
+        created_at=current_user.created_at,
+        is_verified=current_user.email_verified,
+        badges=[],  # TODO: Implement badge fetching if you persist badges
+        preferred_brands=preferred_brands,
+        last_active=current_user.last_login
+
+    )
+
+# Update creator profile
+@router.patch("/profile", response_model=CreatorProfileResponse)
+async def update_creator_profile(
+    profile_update: UserProfileUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if current_user.role != UserRole.CREATOR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only for creators")
+
+    update_data = profile_update.dict(exclude_unset=True)
+
+    # if "gender" in update_data:
+    #     value = update_data["gender"]
+    #     if isinstance(value, Enum):
+    #         update_data["gender"] = value.value.lower()  # Always lowercase!
+    #     else:
+    #         update_data["gender"] = str(value).lower()                                                                                                                      
+
+
+    # print("Gender being set:", update_data["gender"])
+
+
+    if 'content_categories' in update_data:
+        update_data['content_categories'] = [cat.value for cat in update_data['content_categories']]
+
+    for field, value in update_data.items():
+        setattr(current_user, field, value)
+
     try:
-        # Only agencies and brands can search creators
-        if current_user.role not in [UserRole.AGENCY, UserRole.BRAND, UserRole.ADMIN]:
+        await db.commit()
+        await db.refresh(current_user)
+        return await get_creator_profile(current_user, db)
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error updating profile: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update profile")
+
+# Update creator metrics
+@router.patch("/metrics", response_model=dict)
+async def update_creator_metrics(
+    metrics_update: CreatorPerformanceMetrics,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if current_user.role != UserRole.CREATOR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only for creators")
+
+    update_data = metrics_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(current_user, field, value)
+
+    try:
+        await db.commit()
+        await db.refresh(current_user)
+        return {
+            "message": "Metrics updated successfully",
+            "follower_count": current_user.follower_count,
+            "average_views": current_user.average_views,
+            "engagement_rate": float(current_user.engagement_rate or 0)
+        }
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error updating metrics: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update metrics")
+
+# GMV tracking (create a GMV history record)
+@router.post("/gmv", response_model=dict)
+async def update_gmv(
+    gmv_update: GMVUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if current_user.role != UserRole.CREATOR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only for creators")
+
+    # Update current and total GMV
+    if gmv_update.period == "total":
+        current_user.total_gmv = Decimal(str(gmv_update.amount))
+    else:
+        current_user.current_gmv = Decimal(str(gmv_update.amount))
+        current_user.total_gmv = (current_user.total_gmv or Decimal('0')) + Decimal(str(gmv_update.amount))
+
+    # Persist GMV history
+    new_gmv = GMVHistory(
+        id=str(uuid.uuid4()),
+        user_id=str(current_user.id),
+        period=gmv_update.period,
+        amount=gmv_update.amount,
+        date=gmv_update.date or datetime.utcnow().date(),
+        description=gmv_update.description
+    )
+    db.add(new_gmv)
+
+    try:
+        await db.commit()
+        await db.refresh(current_user)
+        return {
+            "message": "GMV updated successfully",
+            "current_gmv": float(current_user.current_gmv or 0),
+            "total_gmv": float(getattr(current_user, 'total_gmv', 0) or 0),
+            "period": gmv_update.period,
+            "amount": gmv_update.amount
+        }
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error updating GMV: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update GMV")
+
+# Get GMV history
+@router.get("/gmv/history", response_model=dict)
+async def get_gmv_history(
+    period: str = Query("30days", pattern="^(7days|30days|90days|all)$"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if current_user.role != UserRole.CREATOR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only for creators")
+
+    result = await db.execute(
+        select(GMVHistory).where(GMVHistory.user_id == str(current_user.id))
+    )
+    history = result.scalars().all()
+    history_list = [
+        {
+            "period": h.period,
+            "amount": h.amount,
+            "date": h.date,
+            "description": h.description,
+        }
+        for h in history
+    ]
+    avg_monthly = (
+        sum(h["amount"] for h in history_list) / len(history_list) if history_list else 0
+    )
+
+    return {
+        "period": period,
+        "current_gmv": float(current_user.current_gmv or 0),
+        "total_gmv": float(getattr(current_user, 'total_gmv', 0) or 0),
+        "average_monthly": avg_monthly,
+        "growth_rate": 0.0,  # TODO: Calculate if needed
+        "history": history_list,
+    }
+# Add this to app/api/v1/endpoints/creators/router.py
+
+
+@router.get("/demographics", response_model=List[DemographicsResponse])
+async def get_creator_demographics(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all demographics for the current creator"""
+    result = await db.execute(
+        select(CreatorAudienceDemographics)
+        .where(CreatorAudienceDemographics.creator_id == current_user.id)
+        .order_by(CreatorAudienceDemographics.age_group)
+    )
+    demographics = result.scalars().all()
+    return demographics
+
+@router.post("/demographics", response_model=DemographicsResponse)
+async def create_creator_demographics(
+    demographics: DemographicsCreate,  # Now doesn't expect creator_id
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new demographics entry for the current creator"""
+    
+    # Check if entry already exists
+    existing = await db.execute(
+        select(CreatorAudienceDemographics)
+        .where(
+            and_(
+                CreatorAudienceDemographics.creator_id == current_user.id,
+                CreatorAudienceDemographics.age_group == demographics.age_group,
+                CreatorAudienceDemographics.country == demographics.country
+            )
+        )
+    )
+    
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail="Demographics entry already exists for this combination"
+        )
+    
+    # Validate percentage sum
+    current_sum = await db.execute(
+        select(func.sum(CreatorAudienceDemographics.percentage))
+        .where(
+            CreatorAudienceDemographics.creator_id == current_user.id
+        )
+    )
+    total = current_sum.scalar() or Decimal('0')
+    
+    if total + demographics.percentage > Decimal('100'):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Total percentage would exceed 100% (current: {total}%)"
+        )
+    
+    # Create new entry with current user's ID
+    new_demographics = CreatorAudienceDemographics(
+        creator_id=current_user.id,  # Set from authenticated user
+        age_group=demographics.age_group,
+        percentage=demographics.percentage,
+        country=demographics.country
+    )
+    db.add(new_demographics)
+    await db.commit()
+    await db.refresh(new_demographics)
+    
+    return new_demographics
+
+@router.put("/demographics/{demographics_id}", response_model=DemographicsResponse)
+async def update_creator_demographics(
+    demographics_id: str,
+    demographics_update: DemographicsUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update a demographics entry for the current creator"""
+    try:
+        # Convert string to UUID
+        demo_uuid = uuid.UUID(demographics_id)
+        
+        # Get existing entry and verify ownership
+        result = await db.execute(
+            select(CreatorAudienceDemographics)
+            .where(
+                and_(
+                    CreatorAudienceDemographics.id == demo_uuid,
+                    CreatorAudienceDemographics.creator_id == current_user.id
+                )
+            )
+        )
+        demographics = result.scalar_one_or_none()
+        
+        if not demographics:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only agencies and brands can search creators"
+                status_code=404,
+                detail="Demographics entry not found or you don't have permission to update it"
             )
         
-        creator_service = CreatorService(db)
+        # Update fields
+        update_data = demographics_update.dict(exclude_unset=True)
         
-        # Search creators
-        search_results = await creator_service.search_creators(
-            content_niche=content_niche,
-            min_followers=min_followers,
-            has_badges=has_badge is not None,
-            page=(offset // limit) + 1,
-            per_page=limit
-        )
+        # If percentage is being updated, validate the sum
+        if 'percentage' in update_data:
+            current_sum = await db.execute(
+                select(func.sum(CreatorAudienceDemographics.percentage))
+                .where(
+                    and_(
+                        CreatorAudienceDemographics.creator_id == current_user.id,
+                        CreatorAudienceDemographics.age_group == demographics.age_group,
+                        CreatorAudienceDemographics.gender == demographics.gender,
+                        CreatorAudienceDemographics.id != demo_uuid
+                    )
+                )
+            )
+            other_sum = current_sum.scalar() or Decimal('0')
+            
+            if other_sum + Decimal(str(update_data['percentage'])) > Decimal('100'):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Total percentage would exceed 100% (current others: {other_sum}%)"
+                )
         
-        # Convert to response format with badges
-        results = []
-        badge_service = BadgeService(db)
+        for field, value in update_data.items():
+            setattr(demographics, field, value)
         
-        for creator_data in search_results['creators']:
-            if creator_data:  # creator_data might be None
-                creator_id = UUID(creator_data['id'])
-                
-                # Get creator full data
-                creator = await creator_service.get_creator_by_id(creator_id)
-                if creator:
-                    badges = await badge_service.get_creator_badges(creator_id)
-                    
-                    results.append(CreatorProfileResponse(
-                        id=creator.id,
-                        username=creator.username,
-                        email=creator.email,
-                        first_name=creator.first_name,
-                        last_name=creator.last_name,
-                        profile_image_url=creator.profile_image_url,
-                        bio=creator.bio,
-                        content_niche=creator.content_niche,
-                        follower_count=creator.follower_count,
-                        average_views=creator.average_views,
-                        engagement_rate=float(creator.engagement_rate) if creator.engagement_rate else None,
-                        current_gmv=float(creator.current_gmv or 0),
-                        tiktok_handle=creator.tiktok_handle,
-                        instagram_handle=creator.instagram_handle,
-                        discord_handle=creator.discord_handle,
-                        badges=[b for b in badges if b.status == "earned"],
-                        badge_progress=None,  # Don't include progress for search results
-                        total_campaigns=0,
-                        completion_rate=0.0,
-                        avg_rating=None,
-                        created_at=creator.created_at,
-                        last_active=creator.last_login,
-                        is_verified=creator.email_verified
-                    ))
+        await db.commit()
+        await db.refresh(demographics)
         
-        return results
+        return demographics
         
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error searching creators: {str(e)}")
+    except ValueError:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to search creators"
+            status_code=400,
+            detail="Invalid demographics ID format"
         )
 
-# Health check
-@router.get("/health")
-async def health_check():
-    """Health check for creators module"""
-    return {
-        "status": "healthy",
-        "module": "creators",
-        "endpoints": [
-            "/profile",
-            "/badges",
-            "/demographics",
-            "/performance",
-            "/analytics",
-            "/leaderboard",
-            "/search"
+@router.delete("/demographics/{demographics_id}")
+async def delete_creator_demographics(
+    demographics_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a demographics entry for the current creator"""
+    try:
+        demo_uuid = uuid.UUID(demographics_id)
+        
+        result = await db.execute(
+            select(CreatorAudienceDemographics)
+            .where(
+                and_(
+                    CreatorAudienceDemographics.id == demo_uuid,
+                    CreatorAudienceDemographics.creator_id == current_user.id
+                )
+            )
+        )
+        demographics = result.scalar_one_or_none()
+        
+        if not demographics:
+            raise HTTPException(
+                status_code=404,
+                detail="Demographics entry not found or you don't have permission to delete it"
+            )
+        
+        await db.delete(demographics)
+        await db.commit()
+        
+        return {"detail": "Demographics entry deleted successfully"}
+        
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid demographics ID format"
+        )
+
+# Add this debug endpoint to your router.py temporarily
+
+@router.get("/demographics/test")
+async def test_demographics_setup(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Debug endpoint to test demographics setup"""
+    debug_info = {
+        "user_id": str(current_user.id),
+        "user_email": current_user.email,
+        "user_role": current_user.role,
+        "checks": {}
+    }
+    
+    # Check 1: Can we import the model?
+    try:
+        from app.models.demographics import CreatorAudienceDemographics
+        debug_info["checks"]["model_import"] = "✓ Success"
+    except Exception as e:
+        debug_info["checks"]["model_import"] = f"✗ Failed: {str(e)}"
+        return debug_info
+    
+    # Check 2: Can we query the table?
+    try:
+        result = await db.execute(text("SELECT COUNT(*) FROM users.creator_audience_demographics"))
+        count = result.scalar()
+        debug_info["checks"]["table_query"] = f"✓ Success - {count} records"
+    except Exception as e:
+        debug_info["checks"]["table_query"] = f"✗ Failed: {str(e)}"
+    
+    # Check 3: Can we use SQLAlchemy to query?
+    try:
+        result = await db.execute(
+            select(CreatorAudienceDemographics).limit(1)
+        )
+        debug_info["checks"]["sqlalchemy_query"] = "✓ Success"
+    except Exception as e:
+        debug_info["checks"]["sqlalchemy_query"] = f"✗ Failed: {str(e)}"
+    
+    # Check 4: Check table columns
+    try:
+        result = await db.execute(
+            text("""
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_schema = 'users' 
+                AND table_name = 'creator_audience_demographics'
+            """)
+        )
+        columns = result.fetchall()
+        debug_info["table_columns"] = [
+            {"name": col[0], "type": col[1]} for col in columns
         ]
+    except Exception as e:
+        debug_info["table_columns"] = f"Error: {str(e)}"
+    
+    # Check 5: Try to create a test object (without saving)
+    try:
+        test_demo = CreatorAudienceDemographics(
+            creator_id=current_user.id,
+            age_group="18-24",
+            gender="male",
+            percentage=25.5,
+            country="US"
+        )
+        debug_info["checks"]["object_creation"] = "✓ Success"
+        debug_info["test_object"] = {
+            "creator_id": str(test_demo.creator_id),
+            "age_group": test_demo.age_group,
+            "gender": test_demo.gender,
+            "percentage": float(test_demo.percentage),
+            "country": test_demo.country
+        }
+    except Exception as e:
+        debug_info["checks"]["object_creation"] = f"✗ Failed: {str(e)}"
+    
+    return debug_info
+
+# Badges (remains as calculated; persist if you later add a table)
+@router.get("/badges", response_model=List[BadgeResponse])
+async def get_creator_badges(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if current_user.role != UserRole.CREATOR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only for creators")
+
+    badges = []
+    total_gmv = float(getattr(current_user, 'total_gmv', 0) or 0)
+    if total_gmv >= 1000:
+        badges.append(BadgeResponse(
+            id="gmv_1k",
+            name="Rising Star",
+            description="Achieved $1,000 in total GMV",
+            icon="⭐",
+            earned_at=datetime.utcnow(),
+            requirements={"gmv": 1000}
+        ))
+    if total_gmv >= 10000:
+        badges.append(BadgeResponse(
+            id="gmv_10k",
+            name="Top Performer",
+            description="Achieved $10,000 in total GMV",
+            icon="🌟",
+            earned_at=datetime.utcnow(),
+            requirements={"gmv": 10000}
+        ))
+    if total_gmv >= 100000:
+        badges.append(BadgeResponse(
+            id="gmv_100k",
+            name="Elite Creator",
+            description="Achieved $100,000 in total GMV",
+            icon="💎",
+            earned_at=datetime.utcnow(),
+            requirements={"gmv": 100000}
+        ))
+    if current_user.engagement_rate and current_user.engagement_rate >= 5:
+        badges.append(BadgeResponse(
+            id="high_engagement",
+            name="Engagement Master",
+            description="Maintained 5%+ engagement rate",
+            icon="🔥",
+            earned_at=datetime.utcnow(),
+            requirements={"engagement_rate": 5}
+        ))
+    if current_user.follower_count and current_user.follower_count >= 10000:
+        badges.append(BadgeResponse(
+            id="10k_followers",
+            name="Growing Influence",
+            description="Reached 10,000 followers",
+            icon="👥",
+            earned_at=datetime.utcnow(),
+            requirements={"followers": 10000}
+        ))
+    return badges
+
+# Analytics (GET)
+@router.get("/analytics", response_model=dict)
+async def get_creator_analytics(
+    period: str = Query("30days", pattern="^(7days|30days|90days)$"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if current_user.role != UserRole.CREATOR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only for creators")
+
+    result = await db.execute(
+        select(Analytics).where(
+            Analytics.user_id == str(current_user.id),
+            Analytics.period == period
+        )
+    )
+    analytics = result.scalars().first()
+    if not analytics:
+        raise HTTPException(status_code=404, detail="No analytics found")
+
+    return {
+        "period": period,
+        "overview": {
+            "total_views": analytics.total_views,
+            "total_engagement": analytics.total_engagement,
+            "follower_growth": analytics.follower_growth,
+            "gmv_growth": analytics.gmv_growth,
+        },
+        "performance": {
+            "best_performing_content": analytics.best_performing_content,
+            "peak_posting_time": analytics.peak_posting_time,
+            "audience_retention": analytics.audience_retention
+        },
+        "recommendations": analytics.recommendations
     }

@@ -191,7 +191,7 @@ class CreatorAudienceDemographic(Base):
     """
     __tablename__ = "creator_audience_demographics"
     __table_args__ = (
-        UniqueConstraint("creator_id", "age_group", "gender", "country", 
+        UniqueConstraint("creator_id", "age_group", "country", 
                         name="uq_creator_demographic"),
         Index("idx_audience_demographics_creator_id", "creator_id"),
         CheckConstraint("percentage >= 0 AND percentage <= 100", 
@@ -202,7 +202,6 @@ class CreatorAudienceDemographic(Base):
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     creator_id = Column(PGUUID(as_uuid=True), ForeignKey("users.users.id", ondelete="CASCADE"), nullable=False)
     age_group = Column(String(20), nullable=False)
-    gender = Column(String(20), nullable=False)
     percentage = Column(Numeric(5, 2), nullable=False)
     country = Column(String(100))
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -216,15 +215,6 @@ class CreatorAudienceDemographic(Base):
         if age_group not in [a.value for a in AgeGroup]:
             raise ValueError(f"Invalid age group: {age_group}")
         return age_group
-
-    @validates("gender")
-    def validate_gender(self, key: str, gender: str) -> str:
-        """Validate gender is a valid enum value"""
-        valid_genders = [g.value for g in GenderType]
-        # Also allow 'all' for aggregate demographics
-        if gender not in valid_genders and gender != 'all':
-            raise ValueError(f"Invalid gender: {gender}")
-        return gender
 
     @validates("percentage")
     def validate_percentage(self, key: str, percentage: Decimal) -> Decimal:
